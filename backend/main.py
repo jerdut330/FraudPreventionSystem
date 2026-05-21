@@ -1,8 +1,10 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from fraud_logic import calculate_fraud_score
+from database import get_connection
 
 app = FastAPI(title="Fraud Prevention System API")
+
 
 class Transaction(BaseModel):
     amount: float
@@ -10,9 +12,11 @@ class Transaction(BaseModel):
     shipping_address: str
     new_customer: bool
 
+
 @app.get("/")
 def root():
     return {"message": "Fraud Prevention System API Running"}
+
 
 @app.post("/analyze")
 def analyze_transaction(transaction: Transaction):
@@ -24,6 +28,21 @@ def analyze_transaction(transaction: Transaction):
         "reasons": reasons
     }
 
+
+@app.get("/transactions")
+def get_transactions():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM transactions;")
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return {"transactions": rows}
+
+
 @app.post("/transactions/{transaction_id}/approve")
 def approve_transaction(transaction_id: int):
     return {
@@ -31,6 +50,7 @@ def approve_transaction(transaction_id: int):
         "decision": "Approved",
         "message": "Transaction approved and forwarded to payment gateway."
     }
+
 
 @app.post("/transactions/{transaction_id}/reject")
 def reject_transaction(transaction_id: int):
