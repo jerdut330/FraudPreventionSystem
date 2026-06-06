@@ -13,7 +13,7 @@ export default function Alerts({ setPage, setSelectedTransactionId }) {
     setLoading(true);
     setError("");
 
-    fetch("http://localhost:8000/alerts")
+    fetch("${import.meta.env.VITE_API_URL}/alerts")
       .then((res) => {
         if (!res.ok) {
           throw new Error("Failed to fetch alerts");
@@ -72,7 +72,7 @@ export default function Alerts({ setPage, setSelectedTransactionId }) {
 
     try {
       const response = await fetch(
-        `http://localhost:8000/transactions/${transactionId}/freeze`,
+        `${import.meta.env.VITE_API_URL}/transactions/${transactionId}/freeze`,
         {
           method: "POST"
         }
@@ -101,7 +101,7 @@ export default function Alerts({ setPage, setSelectedTransactionId }) {
 
     try {
       const response = await fetch(
-        `http://localhost:8000/alerts/${alertId}/review`,
+        `${import.meta.env.VITE_API_URL}/alerts/${alertId}/review`,
         {
           method: "POST"
         }

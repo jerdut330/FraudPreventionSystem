@@ -29,8 +29,8 @@ export default function SubmitTransaction() {
       setOptionsError("");
 
       try {
-        const merchantResponse = await fetch("http://localhost:8000/merchants");
-        const customerResponse = await fetch("http://localhost:8000/customers");
+        const merchantResponse = await fetch("${import.meta.env.VITE_API_URL}/merchants");
+        const customerResponse = await fetch("${import.meta.env.VITE_API_URL}/customers");
 
         const merchantData = await merchantResponse.json();
         const customerData = await customerResponse.json();
@@ -179,7 +179,7 @@ export default function SubmitTransaction() {
     setSubmitLoading(true);
 
     try {
-      const response = await fetch("http://localhost:8000/transactions", {
+      const response = await fetch("${import.meta.env.VITE_API_URL}/transactions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"

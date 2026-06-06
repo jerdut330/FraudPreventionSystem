@@ -41,7 +41,7 @@ export default function TransactionDetail({ transactionId }) {
 
       setError("");
 
-      fetch(`http://localhost:8000/transactions/${transactionId}`)
+      fetch(`${import.meta.env.VITE_API_URL}/transactions/${transactionId}`)
         .then((res) => {
           if (!res.ok) {
             throw new Error("Failed to fetch transaction detail");
@@ -76,7 +76,7 @@ export default function TransactionDetail({ transactionId }) {
 
     try {
       const response = await fetch(
-        `http://localhost:8000/transactions/${transaction.transaction_id}/${action}`,
+        `${import.meta.env.VITE_API_URL}/transactions/${transaction.transaction_id}/${action}`,
         {
           method: "POST"
         }

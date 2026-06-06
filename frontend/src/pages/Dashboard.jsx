@@ -27,10 +27,10 @@ export default function Dashboard() {
 
   useEffect(() => {
     Promise.all([
-      fetch("http://localhost:8000/dashboard/summary").then((res) => res.json()),
-      fetch("http://localhost:8000/dashboard/trends").then((res) => res.json()),
-      fetch("http://localhost:8000/alerts").then((res) => res.json()),
-      fetch("http://localhost:8000/transactions").then((res) => res.json())
+      fetch(`${import.meta.env.VITE_API_URL}/dashboard/summary`).then((res) => res.json()),
+      fetch(`${import.meta.env.VITE_API_URL}/dashboard/trends`).then((res) => res.json()),
+      fetch(`${import.meta.env.VITE_API_URL}/alerts`).then((res) => res.json()),
+      fetch(`${import.meta.env.VITE_API_URL}/transactions`).then((res) => res.json())
     ])
       .then(([summaryData, trendData, alertData, transactionData]) => {
         setSummary(summaryData);
