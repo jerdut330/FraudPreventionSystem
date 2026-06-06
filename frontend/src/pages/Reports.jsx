@@ -27,9 +27,9 @@ export default function Reports() {
 
   useEffect(() => {
     Promise.all([
-      fetch("${import.meta.env.VITE_API_URL}/dashboard/summary").then((res) => res.json()),
-      fetch("${import.meta.env.VITE_API_URL}/transactions").then((res) => res.json()),
-      fetch("${import.meta.env.VITE_API_URL}/alerts").then((res) => res.json())
+      fetch(`${import.meta.env.VITE_API_URL}/dashboard/summary`).then((res) => res.json()),
+      fetch(`${import.meta.env.VITE_API_URL}/transactions`).then((res) => res.json()),
+      fetch(`${import.meta.env.VITE_API_URL}/alerts`).then((res) => res.json())
     ])
       .then(([summaryData, transactionData, alertData]) => {
         setSummary(summaryData);
