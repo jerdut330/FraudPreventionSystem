@@ -11,7 +11,7 @@ export default function Monitoring({ setPage, setSelectedTransactionId }) {
     setLoading(true);
     setError("");
 
-    fetch("${import.meta.env.VITE_API_URL}/transactions")
+    fetch(`${import.meta.env.VITE_API_URL}/transactions`)
       .then((res) => {
         if (!res.ok) {
           throw new Error("Failed to fetch transactions");

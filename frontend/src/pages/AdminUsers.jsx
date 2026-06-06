@@ -10,8 +10,8 @@ export default function AdminUsers() {
 
   useEffect(() => {
     Promise.all([
-      fetch("${import.meta.env.VITE_API_URL}/merchants").then((res) => res.json()),
-      fetch("${import.meta.env.VITE_API_URL}/customers").then((res) => res.json())
+      fetch(`${import.meta.env.VITE_API_URL}/merchants`).then((res) => res.json()),
+      fetch(`${import.meta.env.VITE_API_URL}/customers`).then((res) => res.json())
     ])
       .then(([merchantData, customerData]) => {
         setMerchants(merchantData.merchants || []);

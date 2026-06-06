@@ -13,7 +13,7 @@ export default function Alerts({ setPage, setSelectedTransactionId }) {
     setLoading(true);
     setError("");
 
-    fetch("${import.meta.env.VITE_API_URL}/alerts")
+    fetch(`${import.meta.env.VITE_API_URL}/alerts`)
       .then((res) => {
         if (!res.ok) {
           throw new Error("Failed to fetch alerts");
