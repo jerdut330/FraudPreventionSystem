@@ -10,10 +10,11 @@ import TransactionDetail from "./pages/TransactionDetail";
 import SubmitTransaction from "./pages/SubmitTransaction";
 import Reports from "./pages/Reports";
 import AdminUsers from "./pages/AdminUsers";
+import Profile from "./pages/Profile";
 
 const PAGE_ACCESS = {
-  admin: ["dashboard", "monitoring", "alerts", "detail", "risk", "reports", "admin"],
-  merchant: ["dashboard", "monitoring", "detail", "risk"]
+  admin: ["dashboard", "monitoring", "alerts", "detail", "risk", "reports", "admin", "profile"],
+  merchant: ["dashboard", "monitoring", "detail", "risk", "profile"]
 };
 
 export default function App() {
@@ -107,6 +108,9 @@ export default function App() {
 
       case "admin":
         return <AdminUsers />;
+
+      case "profile":
+        return <Profile currentUser={currentUser} />;
 
       default:
         return <Dashboard />;

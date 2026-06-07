@@ -15,7 +15,11 @@ export default function Layout({
       <Sidebar page={page} setPage={setPage} allowedPages={allowedPages} />
 
       <div className="main-area">
-        <Header currentUser={currentUser} onLogout={onLogout} />
+        <Header
+          currentUser={currentUser}
+          onLogout={onLogout}
+          onProfileClick={() => setPage("profile")}
+        />
 
         <div className="page-content">{children}</div>
       </div>

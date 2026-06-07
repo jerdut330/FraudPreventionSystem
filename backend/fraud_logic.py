@@ -24,7 +24,7 @@ def get_amount_multiplier(product_category):
     category = normalize_text(product_category)
 
     if category == "groceries":
-        return 1.5
+        return 1.8
 
     if category in {"fashion", "home", "beauty", "books"}:
         return 1.2

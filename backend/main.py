@@ -59,6 +59,12 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    email: str
+    current_password: str
+    new_password: str
+
+
 def hash_password(password):
     return "sha256:" + hashlib.sha256(password.encode("utf-8")).hexdigest()
 
@@ -169,7 +175,7 @@ def analyze_fraud(transaction):
     rule_score, rule_risk_level, reasons = calculate_fraud_score(transaction)
     ml_result = predict_fraud_ml(transaction)
     ml_score = round(ml_result["ml_fraud_probability"] * 100)
-    combined_score = round((rule_score * 0.6) + (ml_score * 0.4))
+    combined_score = max(rule_score, round((rule_score * 0.6) + (ml_score * 0.4)))
     combined_risk_level = classify_combined_score(combined_score)
 
     analysis_reasons = list(reasons)
@@ -248,6 +254,63 @@ def login(payload: LoginRequest):
         raise
 
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.post("/auth/change-password")
+def change_password(payload: ChangePasswordRequest):
+    email = payload.email.strip().lower()
+
+    if len(payload.new_password) < 6:
+        raise HTTPException(
+            status_code=400,
+            detail="New password must be at least 6 characters"
+        )
+
+    if email == "admin@fraudshield.com":
+        raise HTTPException(
+            status_code=403,
+            detail="Demo admin password cannot be changed from the app"
+        )
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("""
+            SELECT merchant_id, password_hash
+            FROM merchant
+            WHERE merchant_email = %s;
+        """, (email,))
+
+        merchant = cursor.fetchone()
+
+        if merchant is None or not verify_password(
+            payload.current_password,
+            merchant[1]
+        ):
+            raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+        cursor.execute("""
+            UPDATE merchant
+            SET password_hash = %s
+            WHERE merchant_id = %s;
+        """, (hash_password(payload.new_password), merchant[0]))
+
+        conn.commit()
+
+        return {"message": "Password changed successfully"}
+
+    except HTTPException:
+        conn.rollback()
+        raise
+
+    except Exception as e:
+        conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
@@ -983,7 +1046,7 @@ def update_transaction_decision(transaction_id: int, transaction_status: str, de
 
     try:
         cursor.execute("""
-            SELECT transaction_id
+            SELECT transaction_id, transaction_status
             FROM transactions
             WHERE transaction_id = %s;
         """, (transaction_id,))
@@ -992,6 +1055,14 @@ def update_transaction_decision(transaction_id: int, transaction_status: str, de
 
         if existing_transaction is None:
             raise HTTPException(status_code=404, detail="Transaction not found")
+
+        current_status = existing_transaction[1]
+
+        if current_status != "pending_review":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Transaction is already {current_status} and cannot be changed."
+            )
 
         cursor.execute("""
             UPDATE transactions
@@ -1053,7 +1124,7 @@ def approve_transaction(transaction_id: int):
         transaction_id=transaction_id,
         transaction_status="approved",
         decision="Approved",
-        action="Transaction approved and forwarded to payment gateway."
+        action="Transaction approved."
     )
 
 
@@ -1063,7 +1134,7 @@ def reject_transaction(transaction_id: int):
         transaction_id=transaction_id,
         transaction_status="rejected",
         decision="Rejected",
-        action="Transaction rejected and blocked before payment processing."
+        action="Transaction rejected."
     )
 
 
@@ -1073,5 +1144,5 @@ def freeze_transaction(transaction_id: int):
         transaction_id=transaction_id,
         transaction_status="frozen",
         decision="Frozen",
-        action="Transaction frozen for further investigation."
+        action="Transaction frozen for review."
     )

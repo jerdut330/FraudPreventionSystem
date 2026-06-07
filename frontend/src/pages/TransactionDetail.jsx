@@ -128,6 +128,7 @@ export default function TransactionDetail({ transactionId, currentUser }) {
   }
 
   const riskClass = getRiskClass(transaction.risk_level);
+  const canReviewTransaction = transaction.transaction_status === "pending_review";
 
   return (
     <div>
@@ -164,8 +165,9 @@ export default function TransactionDetail({ transactionId, currentUser }) {
         <div>
           <h3>Transaction Decision</h3>
           <p>
-            Approve, reject, or freeze this transaction. The action will update
-            the database and create an audit log.
+            {canReviewTransaction
+              ? "Approve, reject, or freeze this transaction. The action will update the database and create an audit log."
+              : `This transaction is already ${transaction.transaction_status} and cannot be changed.`}
           </p>
         </div>
 
@@ -173,7 +175,7 @@ export default function TransactionDetail({ transactionId, currentUser }) {
           <button
             className="approve-action-btn"
             onClick={() => handleTransactionAction("approve")}
-            disabled={actionLoading !== ""}
+            disabled={!canReviewTransaction || actionLoading !== ""}
           >
             {actionLoading === "approve" ? "Approving..." : "Approve"}
           </button>
@@ -181,7 +183,7 @@ export default function TransactionDetail({ transactionId, currentUser }) {
           <button
             className="reject-action-btn"
             onClick={() => handleTransactionAction("reject")}
-            disabled={actionLoading !== ""}
+            disabled={!canReviewTransaction || actionLoading !== ""}
           >
             {actionLoading === "reject" ? "Rejecting..." : "Reject"}
           </button>
@@ -189,7 +191,7 @@ export default function TransactionDetail({ transactionId, currentUser }) {
           <button
             className="freeze-action-btn"
             onClick={() => handleTransactionAction("freeze")}
-            disabled={actionLoading !== ""}
+            disabled={!canReviewTransaction || actionLoading !== ""}
           >
             {actionLoading === "freeze" ? "Freezing..." : "Freeze"}
           </button>
@@ -330,26 +332,7 @@ export default function TransactionDetail({ transactionId, currentUser }) {
           )}
         </div>
 
-        <div className="detail-card">
-          <h3>Delivery Information</h3>
-
-          <div className="detail-row">
-            <span>Courier</span>
-            <strong>{transaction.courier_name || "Not assigned"}</strong>
-          </div>
-
-          <div className="detail-row">
-            <span>Tracking Number</span>
-            <strong>{transaction.tracking_number || "N/A"}</strong>
-          </div>
-
-          <div className="detail-row">
-            <span>Delivery Status</span>
-            <strong>{transaction.delivery_status || "Pending"}</strong>
-          </div>
-        </div>
-
-        <div className="detail-card">
+        <div className="detail-card audit-card wide-card">
           <h3>Audit Log</h3>
 
           {transaction.audit_logs.length === 0 ? (

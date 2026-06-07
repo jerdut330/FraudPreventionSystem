@@ -58,10 +58,12 @@ The system uses a hybrid fraud detection approach:
    features.
 3. The backend combines both outputs into one final fraud risk score.
 
-The final score uses this weighting:
+The final score uses this weighting, while keeping the rule-based score as the
+minimum explainable risk:
 
 ```text
-Final Risk Score = 60% rule-based score + 40% machine-learning score
+Blended Score = 60% rule-based score + 40% machine-learning score
+Final Risk Score = max(rule-based score, blended score)
 ```
 
 Risk levels:
@@ -90,7 +92,7 @@ Amount score = min(round((amount / 100000) * category_multiplier), 40)
 ```
 
 ```text
-Groceries: 1.5
+Groceries: 1.8
 Fashion/Home/Beauty/Books: 1.2
 Electronics/Travel: 0.9
 Jewelry/Luxury: 0.6

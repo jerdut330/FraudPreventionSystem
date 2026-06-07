@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Download } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import { buildApiUrl } from "../utils/api";
 
@@ -57,6 +58,57 @@ export default function Reports({ currentUser }) {
 
     return matchesRisk && matchesStatus;
   });
+
+  const escapeCsvValue = (value) => {
+    const text = String(value ?? "");
+    return `"${text.replaceAll('"', '""')}"`;
+  };
+
+  const exportTransactionsCsv = () => {
+    const headers = [
+      "Transaction ID",
+      "Customer",
+      "Customer Email",
+      "Merchant",
+      "Amount",
+      "Product Category",
+      "Risk Score",
+      "Risk Level",
+      "Status",
+      "Decision",
+      "Date"
+    ];
+
+    const rows = filteredTransactions.map((transaction) => [
+      `TX-${transaction.transaction_id}`,
+      transaction.customer_name,
+      transaction.customer_email,
+      transaction.merchant_name,
+      transaction.amount,
+      transaction.product_category,
+      transaction.risk_score,
+      transaction.risk_level,
+      transaction.transaction_status,
+      transaction.decision,
+      formatDate(transaction.transaction_date)
+    ]);
+
+    const csvContent = [headers, ...rows]
+      .map((row) => row.map(escapeCsvValue).join(","))
+      .join("\n");
+
+    const blob = new Blob([csvContent], {
+      type: "text/csv;charset=utf-8;"
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const date = new Date().toISOString().slice(0, 10);
+
+    link.href = url;
+    link.download = `fraudshield-transactions-${date}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   if (loading) {
     return (
@@ -194,6 +246,16 @@ export default function Reports({ currentUser }) {
             </select>
 
             <span>{filteredTransactions.length} records</span>
+
+            <button
+              className="report-export-btn"
+              type="button"
+              onClick={exportTransactionsCsv}
+              disabled={filteredTransactions.length === 0}
+            >
+              <Download size={16} />
+              Export CSV
+            </button>
           </div>
         </div>
 

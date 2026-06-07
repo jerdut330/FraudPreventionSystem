@@ -96,9 +96,9 @@ export default function Dashboard({ currentUser }) {
 
         <div className="command-card green">
           <div>
-            <span>Total Value</span>
+            <span>Analyzed Value</span>
             <h2>{formatCurrency(summary.total_transaction_value)}</h2>
-            <p>Processed transaction value</p>
+            <p>Total value screened by the system</p>
           </div>
           <DollarSign />
         </div>
