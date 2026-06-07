@@ -9,8 +9,9 @@ import {
 } from "lucide-react";
 
 import PageHeader from "../components/PageHeader";
+import { buildApiUrl } from "../utils/api";
 
-export default function Dashboard() {
+export default function Dashboard({ currentUser }) {
   const [summary, setSummary] = useState(null);
   const [trends, setTrends] = useState([]);
   const [alerts, setAlerts] = useState([]);
@@ -27,10 +28,10 @@ export default function Dashboard() {
 
   useEffect(() => {
     Promise.all([
-      fetch(`${import.meta.env.VITE_API_URL}/dashboard/summary`).then((res) => res.json()),
-      fetch(`${import.meta.env.VITE_API_URL}/dashboard/trends`).then((res) => res.json()),
-      fetch(`${import.meta.env.VITE_API_URL}/alerts`).then((res) => res.json()),
-      fetch(`${import.meta.env.VITE_API_URL}/transactions`).then((res) => res.json())
+      fetch(buildApiUrl("/dashboard/summary", currentUser)).then((res) => res.json()),
+      fetch(buildApiUrl("/dashboard/trends", currentUser)).then((res) => res.json()),
+      fetch(buildApiUrl("/alerts", currentUser)).then((res) => res.json()),
+      fetch(buildApiUrl("/transactions", currentUser)).then((res) => res.json())
     ])
       .then(([summaryData, trendData, alertData, transactionData]) => {
         setSummary(summaryData);
@@ -43,7 +44,7 @@ export default function Dashboard() {
         console.error(err);
         setLoading(false);
       });
-  }, []);
+  }, [currentUser]);
 
   if (loading || !summary) {
     return (

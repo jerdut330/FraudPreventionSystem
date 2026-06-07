@@ -1,6 +1,18 @@
 import React, { useEffect, useState } from "react";
 import PageHeader from "../components/PageHeader";
 
+const PRODUCT_CATEGORIES = [
+  "Groceries",
+  "Fashion",
+  "Books",
+  "Home",
+  "Beauty",
+  "Electronics",
+  "Jewelry",
+  "Luxury",
+  "Travel"
+];
+
 export default function SubmitTransaction() {
   const [formData, setFormData] = useState({
     merchant_id: "",
@@ -150,6 +162,14 @@ export default function SubmitTransaction() {
 
     if (value.includes("high")) return "danger";
     if (value.includes("medium")) return "warning";
+    return "safe";
+  };
+
+  const getBreakdownClass = (level) => {
+    const value = String(level).toLowerCase();
+
+    if (value.includes("high")) return "danger";
+    if (value.includes("moderate")) return "warning";
     return "safe";
   };
 
@@ -307,13 +327,18 @@ export default function SubmitTransaction() {
 
             <div className="form-field">
               <label>Product Category</label>
-              <input
-                type="text"
+              <select
                 name="product_category"
                 value={formData.product_category}
                 onChange={handleChange}
-                placeholder="Example: Electronics"
-              />
+              >
+                <option value="">Select product category</option>
+                {PRODUCT_CATEGORIES.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
               {errors.product_category && (
                 <span className="field-error">{errors.product_category}</span>
               )}
@@ -406,9 +431,9 @@ export default function SubmitTransaction() {
                 <strong>{result.transaction_status}</strong>
               </div>
 
-              <div className="result-row">
-                <span>Decision</span>
-                <strong>{result.decision}</strong>
+              <div className="result-action-box">
+                <span>Recommended Action</span>
+                <strong>{result.recommended_action}</strong>
               </div>
 
               <div className="result-row">
@@ -422,6 +447,23 @@ export default function SubmitTransaction() {
                   {result.risk_level}
                 </strong>
               </div>
+
+              {Array.isArray(result.risk_breakdown) && (
+                <div className="risk-breakdown-panel">
+                  <span>Risk Breakdown</span>
+
+                  <div className="risk-breakdown-list">
+                    {result.risk_breakdown.map((item) => (
+                      <div className="risk-breakdown-item" key={item.label}>
+                        <p>{item.label}</p>
+                        <strong className={getBreakdownClass(item.level)}>
+                          {item.level}
+                        </strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="result-reasons">
                 <span>Reasons</span>

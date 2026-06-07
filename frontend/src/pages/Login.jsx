@@ -1,7 +1,55 @@
-import React from "react";
+import React, { useState } from "react";
 import { ShieldCheck, LockKeyhole, Mail } from "lucide-react";
 
-export default function Login({ setLoggedIn }) {
+export default function Login({ onLogin }) {
+  const [email, setEmail] = useState("admin@fraudshield.com");
+  const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const getServerErrorMessage = (detail) => {
+    if (typeof detail === "string") {
+      return detail;
+    }
+
+    if (Array.isArray(detail)) {
+      return detail.map((item) => item.msg).join(", ");
+    }
+
+    return "Login failed.";
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim(),
+          password
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(getServerErrorMessage(data.detail));
+      }
+
+      onLogin(data.user, rememberMe);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "Could not sign in.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="auth-page centered-login-page">
       <div className="centered-login-box">
@@ -20,74 +68,63 @@ export default function Login({ setLoggedIn }) {
             </p>
           </div>
 
-          <div className="form-group">
+          {error && <div className="login-error-message">{error}</div>}
+
+          <form className="login-form" onSubmit={handleSubmit}>
+            <div className="form-group">
             <label>Email address</label>
             <div className="input-with-icon">
               <Mail size={18} />
-              <input type="email" placeholder="admin@fraudshield.com" />
+              <input
+                type="email"
+                placeholder="admin@fraudshield.com"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                required
+              />
             </div>
-          </div>
+            </div>
 
-          <div className="form-group">
+            <div className="form-group">
             <label>Password</label>
             <div className="input-with-icon">
               <LockKeyhole size={18} />
-              <input type="password" placeholder="Enter your password" />
+              <input
+                type="password"
+                placeholder="Enter your password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+              />
             </div>
-          </div>
+            </div>
 
-          <div className="auth-options">
+            <div className="auth-options">
             <label className="remember-me">
-              <input type="checkbox" />
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(event) => setRememberMe(event.target.checked)}
+              />
               <span>Remember for 30 days</span>
             </label>
 
             <button className="link-button" type="button">
               Forgot password?
             </button>
-          </div>
-
-          <button
-            className="primary-login-btn"
-            onClick={() => setLoggedIn(true)}
-          >
-            Sign in
-          </button>
-
-          <div className="divider">
-            <span></span>
-            <p>or continue with</p>
-            <span></span>
-          </div>
-
-          <div className="social-login-grid">
-            <button
-              className="social-login-btn"
-              onClick={() => setLoggedIn(true)}
-            >
-              <span className="google-icon">G</span>
-              Google
-            </button>
+            </div>
 
             <button
-              className="social-login-btn"
-              onClick={() => setLoggedIn(true)}
+              className="primary-login-btn"
+              type="submit"
+              disabled={loading}
             >
-              <span className="microsoft-icon">
-                <i></i>
-                <i></i>
-                <i></i>
-                <i></i>
-              </span>
-              Microsoft
+              {loading ? "Signing in..." : "Sign in"}
             </button>
-          </div>
+          </form>
 
-          <p className="signup-text">
-            Don&apos;t have an account?{" "}
-            <button type="button" className="link-button">
-              Sign up
-            </button>
+          <p className="login-help-text">
+            Demo admin: admin@fraudshield.com / admin123
           </p>
         </div>
       </div>

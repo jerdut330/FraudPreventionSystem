@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import Layout from "./components/Layout";
 
@@ -11,25 +11,75 @@ import SubmitTransaction from "./pages/SubmitTransaction";
 import Reports from "./pages/Reports";
 import AdminUsers from "./pages/AdminUsers";
 
+const PAGE_ACCESS = {
+  admin: ["dashboard", "monitoring", "alerts", "detail", "risk", "reports", "admin"],
+  merchant: ["dashboard", "monitoring", "detail", "risk"]
+};
+
 export default function App() {
   const [page, setPage] = useState("dashboard");
   const [loggedIn, setLoggedIn] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
   const [selectedTransactionId, setSelectedTransactionId] = useState(1);
 
+  useEffect(() => {
+    const savedUser =
+      localStorage.getItem("fraudshield_user") ||
+      sessionStorage.getItem("fraudshield_user");
+
+    if (savedUser) {
+      setCurrentUser(JSON.parse(savedUser));
+      setLoggedIn(true);
+    }
+  }, []);
+
+  const handleLogin = (user, rememberUser) => {
+    const storage = rememberUser ? localStorage : sessionStorage;
+    storage.setItem("fraudshield_user", JSON.stringify(user));
+    setCurrentUser(user);
+    setLoggedIn(true);
+    setPage("dashboard");
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("fraudshield_user");
+    sessionStorage.removeItem("fraudshield_user");
+    setCurrentUser(null);
+    setLoggedIn(false);
+    setPage("dashboard");
+  };
+
   if (!loggedIn) {
-    return <Login setLoggedIn={setLoggedIn} />;
+    return <Login onLogin={handleLogin} />;
   }
 
+  const accountType = currentUser?.account_type || "merchant";
+  const allowedPages = PAGE_ACCESS[accountType] || PAGE_ACCESS.merchant;
+
+  const handlePageChange = (nextPage) => {
+    if (allowedPages.includes(nextPage)) {
+      setPage(nextPage);
+      return;
+    }
+
+    setPage("dashboard");
+  };
+
   const renderPage = () => {
+    if (!allowedPages.includes(page)) {
+      return <Dashboard />;
+    }
+
     switch (page) {
       case "dashboard":
-        return <Dashboard />;
+        return <Dashboard currentUser={currentUser} />;
 
       case "monitoring":
         return (
           <Monitoring
             setPage={setPage}
             setSelectedTransactionId={setSelectedTransactionId}
+            currentUser={currentUser}
           />
         );
 
@@ -42,13 +92,18 @@ export default function App() {
         );
 
       case "detail":
-        return <TransactionDetail transactionId={selectedTransactionId} />;
+        return (
+          <TransactionDetail
+            transactionId={selectedTransactionId}
+            currentUser={currentUser}
+          />
+        );
 
       case "risk":
         return <SubmitTransaction />;
 
       case "reports":
-        return <Reports />;
+        return <Reports currentUser={currentUser} />;
 
       case "admin":
         return <AdminUsers />;
@@ -59,7 +114,13 @@ export default function App() {
   };
 
   return (
-    <Layout page={page} setPage={setPage}>
+    <Layout
+      page={page}
+      setPage={handlePageChange}
+      currentUser={currentUser}
+      onLogout={handleLogout}
+      allowedPages={allowedPages}
+    >
       {renderPage()}
     </Layout>
   );

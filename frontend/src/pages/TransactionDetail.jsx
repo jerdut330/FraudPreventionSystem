@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from "react";
 import PageHeader from "../components/PageHeader";
+import { buildApiUrl } from "../utils/api";
 
-export default function TransactionDetail({ transactionId }) {
+export default function TransactionDetail({ transactionId, currentUser }) {
   const [transaction, setTransaction] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
@@ -41,7 +42,7 @@ export default function TransactionDetail({ transactionId }) {
 
       setError("");
 
-      fetch(`${import.meta.env.VITE_API_URL}/transactions/${transactionId}`)
+      fetch(buildApiUrl(`/transactions/${transactionId}`, currentUser))
         .then((res) => {
           if (!res.ok) {
             throw new Error("Failed to fetch transaction detail");
@@ -59,7 +60,7 @@ export default function TransactionDetail({ transactionId }) {
           setLoading(false);
         });
     },
-    [transactionId]
+    [transactionId, currentUser]
   );
 
   useEffect(() => {

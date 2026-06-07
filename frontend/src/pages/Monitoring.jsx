@@ -1,17 +1,20 @@
 import React, { useEffect, useState } from "react";
 import PageHeader from "../components/PageHeader";
+import { buildApiUrl } from "../utils/api";
 
-export default function Monitoring({ setPage, setSelectedTransactionId }) {
+export default function Monitoring({ setPage, setSelectedTransactionId, currentUser }) {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
+  const [riskFilter, setRiskFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   const fetchTransactions = () => {
     setLoading(true);
     setError("");
 
-    fetch(`${import.meta.env.VITE_API_URL}/transactions`)
+    fetch(buildApiUrl("/transactions", currentUser))
       .then((res) => {
         if (!res.ok) {
           throw new Error("Failed to fetch transactions");
@@ -32,7 +35,7 @@ export default function Monitoring({ setPage, setSelectedTransactionId }) {
 
   useEffect(() => {
     fetchTransactions();
-  }, []);
+  }, [currentUser]);
 
   const formatAmount = (amount) => {
     return new Intl.NumberFormat("id-ID", {
@@ -94,17 +97,23 @@ export default function Monitoring({ setPage, setSelectedTransactionId }) {
 
   const filteredTransactions = transactions.filter((transaction) => {
     const searchValue = searchTerm.toLowerCase();
-
-    return (
+    const riskValue = String(transaction.risk_level).toLowerCase();
+    const statusValue = String(transaction.transaction_status).toLowerCase();
+    const matchesRisk =
+      riskFilter === "all" || riskValue.includes(riskFilter);
+    const matchesStatus =
+      statusFilter === "all" || statusValue.includes(statusFilter);
+    const matchesSearch =
       `tx-${transaction.transaction_id}`.includes(searchValue) ||
       String(transaction.transaction_id).includes(searchValue) ||
       String(transaction.customer_name).toLowerCase().includes(searchValue) ||
       String(transaction.customer_email).toLowerCase().includes(searchValue) ||
       String(transaction.merchant_name).toLowerCase().includes(searchValue) ||
       String(transaction.product_category).toLowerCase().includes(searchValue) ||
-      String(transaction.transaction_status).toLowerCase().includes(searchValue) ||
-      String(transaction.risk_level).toLowerCase().includes(searchValue)
-    );
+      statusValue.includes(searchValue) ||
+      riskValue.includes(searchValue);
+
+    return matchesRisk && matchesStatus && matchesSearch;
   });
 
   if (loading) {
@@ -143,13 +152,38 @@ export default function Monitoring({ setPage, setSelectedTransactionId }) {
           </p>
         </div>
 
-        <input
-          type="text"
-          className="monitoring-search"
-          value={searchTerm}
-          onChange={(event) => setSearchTerm(event.target.value)}
-          placeholder="Search TX ID, customer, merchant, status..."
-        />
+        <div className="monitoring-controls">
+          <input
+            type="text"
+            className="monitoring-search"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Search TX ID, customer, merchant, status..."
+          />
+
+          <select
+            className="monitoring-filter"
+            value={riskFilter}
+            onChange={(event) => setRiskFilter(event.target.value)}
+          >
+            <option value="all">All Risks</option>
+            <option value="low">Low Risk</option>
+            <option value="medium">Medium Risk</option>
+            <option value="high">High Risk</option>
+          </select>
+
+          <select
+            className="monitoring-filter"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+          >
+            <option value="all">All Statuses</option>
+            <option value="approved">Approved</option>
+            <option value="pending">Pending Review</option>
+            <option value="rejected">Rejected</option>
+            <option value="frozen">Frozen</option>
+          </select>
+        </div>
       </div>
 
       <div className="monitoring-table-card">

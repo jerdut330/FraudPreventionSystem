@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from "react";
 import PageHeader from "../components/PageHeader";
+import { buildApiUrl } from "../utils/api";
 
-export default function Reports() {
+export default function Reports({ currentUser }) {
   const [summary, setSummary] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [riskFilter, setRiskFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   const formatCurrency = (value) => {
     return new Intl.NumberFormat("id-ID", {
@@ -27,9 +30,9 @@ export default function Reports() {
 
   useEffect(() => {
     Promise.all([
-      fetch(`${import.meta.env.VITE_API_URL}/dashboard/summary`).then((res) => res.json()),
-      fetch(`${import.meta.env.VITE_API_URL}/transactions`).then((res) => res.json()),
-      fetch(`${import.meta.env.VITE_API_URL}/alerts`).then((res) => res.json())
+      fetch(buildApiUrl("/dashboard/summary", currentUser)).then((res) => res.json()),
+      fetch(buildApiUrl("/transactions", currentUser)).then((res) => res.json()),
+      fetch(buildApiUrl("/alerts", currentUser)).then((res) => res.json())
     ])
       .then(([summaryData, transactionData, alertData]) => {
         setSummary(summaryData);
@@ -42,7 +45,18 @@ export default function Reports() {
         setError("Could not load report data from backend.");
         setLoading(false);
       });
-  }, []);
+  }, [currentUser]);
+
+  const filteredTransactions = transactions.filter((transaction) => {
+    const riskValue = String(transaction.risk_level).toLowerCase();
+    const statusValue = String(transaction.transaction_status).toLowerCase();
+    const matchesRisk =
+      riskFilter === "all" || riskValue.includes(riskFilter);
+    const matchesStatus =
+      statusFilter === "all" || statusValue.includes(statusFilter);
+
+    return matchesRisk && matchesStatus;
+  });
 
   if (loading) {
     return (
@@ -157,7 +171,30 @@ export default function Reports() {
             <p>Complete recent transaction history and fraud decisions</p>
           </div>
 
-          <span>{transactions.length} records</span>
+          <div className="report-table-controls">
+            <select
+              value={riskFilter}
+              onChange={(event) => setRiskFilter(event.target.value)}
+            >
+              <option value="all">All Risks</option>
+              <option value="low">Low Risk</option>
+              <option value="medium">Medium Risk</option>
+              <option value="high">High Risk</option>
+            </select>
+
+            <select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value)}
+            >
+              <option value="all">All Statuses</option>
+              <option value="approved">Approved</option>
+              <option value="pending">Pending Review</option>
+              <option value="rejected">Rejected</option>
+              <option value="frozen">Frozen</option>
+            </select>
+
+            <span>{filteredTransactions.length} records</span>
+          </div>
         </div>
 
         <div className="report-table-wrap">
@@ -176,7 +213,7 @@ export default function Reports() {
             </thead>
 
             <tbody>
-              {transactions.map((transaction) => (
+              {filteredTransactions.map((transaction) => (
                 <tr key={transaction.transaction_id}>
                   <td>TX-{transaction.transaction_id}</td>
                   <td>{transaction.customer_name}</td>

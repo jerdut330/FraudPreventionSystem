@@ -9,7 +9,7 @@ import {
   FileSearch
 } from "lucide-react";
 
-export default function Sidebar({ page, setPage }) {
+export default function Sidebar({ page, setPage, allowedPages }) {
   const items = [
     {
       id: "dashboard",
@@ -48,13 +48,17 @@ export default function Sidebar({ page, setPage }) {
     }
   ];
 
+  const visibleItems = items.filter((item) =>
+    !allowedPages || allowedPages.includes(item.id)
+  );
+
   return (
     <div className="sidebar">
       <div>
         <div className="logo">FraudShield</div>
 
         <div className="nav-menu">
-          {items.map((item) => (
+          {visibleItems.map((item) => (
             <button
               key={item.id}
               className={`nav-item ${page === item.id ? "active" : ""}`}

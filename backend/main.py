@@ -1,8 +1,13 @@
+import hashlib
+from typing import Optional
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from psycopg.errors import UniqueViolation
 
-from fraud_logic import calculate_fraud_score
+from fraud_logic import calculate_amount_score, calculate_fraud_score
+from ml_model import predict_fraud_ml
 from database import get_connection
 
 
@@ -35,29 +40,243 @@ class NewTransaction(BaseModel):
     new_customer: bool
 
 
+class NewMerchant(BaseModel):
+    merchant_name: str
+    merchant_email: str
+    password: Optional[str] = None
+    business_type: Optional[str] = None
+
+
+class NewCustomer(BaseModel):
+    customer_name: str
+    customer_email: str
+    customer_pnumber: Optional[str] = None
+    customer_address: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+def hash_password(password):
+    return "sha256:" + hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def generate_merchant_password(email):
+    email_name = email.split("@")[0]
+    safe_name = "".join(char for char in email_name if char.isalnum()).lower()
+    return f"{safe_name or 'merchant'}123"
+
+
+def verify_password(password, stored_password):
+    if not stored_password:
+        return False
+
+    if stored_password.startswith("sha256:"):
+        return stored_password == hash_password(password)
+
+    if stored_password.startswith("placeholder_hash_"):
+        return stored_password == f"placeholder_hash_{password}"
+
+    if stored_password == "hashed_password_example":
+        return password == "merchant123"
+
+    return stored_password == password
+
+
+def classify_combined_score(score):
+    if score < 30:
+        return "Low Risk"
+    if score < 70:
+        return "Medium Risk"
+    return "High Risk"
+
+
+def classify_breakdown_score(score):
+    if score < 15:
+        return "Low"
+    if score < 30:
+        return "Moderate"
+    return "High"
+
+
+def build_risk_breakdown(transaction):
+    amount = float(getattr(transaction, "amount", 0) or 0)
+    product_category = str(getattr(transaction, "product_category", "") or "").lower()
+    billing_address = str(getattr(transaction, "billing_address", "") or "").strip().lower()
+    shipping_address = str(getattr(transaction, "shipping_address", "") or "").strip().lower()
+    ip_location = str(getattr(transaction, "ip_location", "") or "").strip().lower()
+
+    amount_score = calculate_amount_score(amount, product_category)
+    location_score = 0
+    customer_score = 0
+
+    if billing_address != shipping_address:
+        location_score += 20
+
+    if ip_location and shipping_address and ip_location != shipping_address:
+        location_score += 15
+
+    if product_category in {"electronics", "jewelry", "luxury", "travel"}:
+        customer_score += 10
+
+    if transaction.new_customer:
+        customer_score += 10
+
+    return [
+        {
+            "label": "Amount Risk",
+            "level": classify_breakdown_score(amount_score),
+            "score": amount_score
+        },
+        {
+            "label": "Location Risk",
+            "level": classify_breakdown_score(location_score),
+            "score": min(location_score, 40)
+        },
+        {
+            "label": "Customer & Product Risk",
+            "level": classify_breakdown_score(customer_score),
+            "score": customer_score
+        }
+    ]
+
+
+def get_recommended_action(risk_level):
+    if "High" in risk_level:
+        return "Reject or freeze this transaction before payment processing."
+    if "Medium" in risk_level:
+        return "Send this transaction for manual review before fulfillment."
+    return "Approve this transaction and continue normal order processing."
+
+
+def get_merchant_scope(account_type=None, merchant_id=None):
+    if account_type == "merchant" and merchant_id is not None:
+        return " WHERE merchant_id = %s", (merchant_id,)
+
+    return "", ()
+
+
+def get_prefixed_merchant_scope(account_type=None, merchant_id=None, prefix="t"):
+    if account_type == "merchant" and merchant_id is not None:
+        return f" WHERE {prefix}.merchant_id = %s", (merchant_id,)
+
+    return "", ()
+
+
+def analyze_fraud(transaction):
+    rule_score, rule_risk_level, reasons = calculate_fraud_score(transaction)
+    ml_result = predict_fraud_ml(transaction)
+    ml_score = round(ml_result["ml_fraud_probability"] * 100)
+    combined_score = round((rule_score * 0.6) + (ml_score * 0.4))
+    combined_risk_level = classify_combined_score(combined_score)
+
+    analysis_reasons = list(reasons)
+
+    if ml_score >= 70:
+        analysis_reasons.append("Machine learning model found strong risk indicators")
+    elif ml_score >= 40:
+        analysis_reasons.append("Machine learning model found moderate risk indicators")
+
+    return {
+        "risk_score": combined_score,
+        "risk_level": combined_risk_level,
+        "reasons": analysis_reasons,
+        "rule_score": rule_score,
+        "rule_risk_level": rule_risk_level,
+        "recommended_action": get_recommended_action(combined_risk_level),
+        "risk_breakdown": build_risk_breakdown(transaction),
+        **ml_result
+    }
+
+
 @app.get("/")
 def root():
     return {"message": "Fraud Prevention System API Running"}
 
 
-@app.post("/analyze")
-def analyze_transaction(transaction: Transaction):
-    risk_score, risk_level, reasons = calculate_fraud_score(transaction)
+@app.post("/auth/login")
+def login(payload: LoginRequest):
+    email = payload.email.strip().lower()
+    password = payload.password
 
-    return {
-        "risk_score": risk_score,
-        "risk_level": risk_level,
-        "reasons": reasons
-    }
+    if email == "admin@fraudshield.com" and password == "admin123":
+        return {
+            "message": "Login successful",
+            "user": {
+                "id": "admin",
+                "name": "Admin",
+                "email": email,
+                "role": "Fraud Analyst",
+                "account_type": "admin"
+            }
+        }
 
-
-@app.get("/dashboard/summary")
-def get_dashboard_summary():
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
         cursor.execute("""
+            SELECT
+                merchant_id,
+                merchant_name,
+                merchant_email,
+                password_hash,
+                business_type
+            FROM merchant
+            WHERE merchant_email = %s;
+        """, (email,))
+
+        merchant = cursor.fetchone()
+
+        if merchant is None or not verify_password(password, merchant[3]):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+
+        return {
+            "message": "Login successful",
+            "user": {
+                "id": merchant[0],
+                "name": merchant[1],
+                "email": merchant[2],
+                "role": merchant[4] or "Merchant",
+                "account_type": "merchant"
+            }
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.post("/analyze")
+def analyze_transaction(transaction: Transaction):
+    return analyze_fraud(transaction)
+
+
+@app.get("/dashboard/summary")
+def get_dashboard_summary(account_type: Optional[str] = None, merchant_id: Optional[int] = None):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        transaction_where, transaction_params = get_merchant_scope(
+            account_type,
+            merchant_id
+        )
+        joined_where, joined_params = get_prefixed_merchant_scope(
+            account_type,
+            merchant_id,
+            "t"
+        )
+
+        cursor.execute(f"""
             SELECT
                 COUNT(*) AS total_transactions,
                 COUNT(*) FILTER (WHERE transaction_status = 'approved') AS approved_transactions,
@@ -65,28 +284,35 @@ def get_dashboard_summary():
                 COUNT(*) FILTER (WHERE transaction_status = 'rejected') AS rejected_transactions,
                 COUNT(*) FILTER (WHERE transaction_status = 'frozen') AS frozen_transactions,
                 COALESCE(SUM(amount), 0) AS total_transaction_value
-            FROM transactions;
-        """)
+            FROM transactions
+            {transaction_where};
+        """, transaction_params)
 
         transaction_summary = cursor.fetchone()
 
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT
                 COUNT(*) AS total_alerts,
                 COUNT(*) FILTER (WHERE status = 'Unread') AS unread_alerts,
                 COUNT(*) FILTER (WHERE status = 'Reviewed') AS reviewed_alerts
-            FROM alert;
-        """)
+            FROM alert a
+            JOIN transactions t
+                ON a.transaction_id = t.transaction_id
+            {joined_where};
+        """, joined_params)
 
         alert_summary = cursor.fetchone()
 
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT
-                COUNT(*) FILTER (WHERE risk_level ILIKE '%High%') AS high_risk,
-                COUNT(*) FILTER (WHERE risk_level ILIKE '%Medium%') AS medium_risk,
-                COUNT(*) FILTER (WHERE risk_level ILIKE '%Low%') AS low_risk
-            FROM fraud_check;
-        """)
+                COUNT(*) FILTER (WHERE risk_level ILIKE '%%High%%') AS high_risk,
+                COUNT(*) FILTER (WHERE risk_level ILIKE '%%Medium%%') AS medium_risk,
+                COUNT(*) FILTER (WHERE risk_level ILIKE '%%Low%%') AS low_risk
+            FROM fraud_check fc
+            JOIN transactions t
+                ON fc.transaction_id = t.transaction_id
+            {joined_where};
+        """, joined_params)
 
         risk_summary = cursor.fetchone()
 
@@ -113,12 +339,17 @@ def get_dashboard_summary():
         conn.close()
 
 @app.get("/dashboard/trends")
-def get_dashboard_trends():
+def get_dashboard_trends(account_type: Optional[str] = None, merchant_id: Optional[int] = None):
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-        cursor.execute("""
+        transaction_where, transaction_params = get_merchant_scope(
+            account_type,
+            merchant_id
+        )
+
+        cursor.execute(f"""
             SELECT
                 DATE(transaction_date) AS date,
                 COUNT(*) AS total,
@@ -127,9 +358,10 @@ def get_dashboard_trends():
                 COUNT(*) FILTER (WHERE transaction_status = 'rejected') AS rejected,
                 COUNT(*) FILTER (WHERE transaction_status = 'frozen') AS frozen
             FROM transactions
+            {transaction_where}
             GROUP BY DATE(transaction_date)
             ORDER BY DATE(transaction_date) ASC;
-        """)
+        """, transaction_params)
 
         rows = cursor.fetchall()
 
@@ -187,6 +419,58 @@ def get_merchants():
         conn.close()
 
 
+@app.post("/merchants")
+def create_merchant(merchant: NewMerchant):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        merchant_email = merchant.merchant_email.strip().lower()
+        initial_password = merchant.password or generate_merchant_password(merchant_email)
+
+        cursor.execute("""
+            INSERT INTO merchant (
+                merchant_name,
+                merchant_email,
+                password_hash,
+                business_type
+            )
+            VALUES (%s, %s, %s, %s)
+            RETURNING merchant_id, merchant_name, merchant_email, business_type;
+        """, (
+            merchant.merchant_name.strip(),
+            merchant_email,
+            hash_password(initial_password),
+            merchant.business_type.strip() if merchant.business_type else None
+        ))
+
+        row = cursor.fetchone()
+        conn.commit()
+
+        return {
+            "message": "Merchant created successfully",
+            "initial_password": initial_password,
+            "merchant": {
+                "merchant_id": row[0],
+                "merchant_name": row[1],
+                "merchant_email": row[2],
+                "business_type": row[3]
+            }
+        }
+
+    except UniqueViolation:
+        conn.rollback()
+        raise HTTPException(status_code=409, detail="Merchant email already exists")
+
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
 @app.get("/customers")
 def get_customers():
     conn = get_connection()
@@ -222,13 +506,65 @@ def get_customers():
         conn.close()
 
 
+@app.post("/customers")
+def create_customer(customer: NewCustomer):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("""
+            INSERT INTO customer (
+                customer_name,
+                customer_email,
+                customer_pnumber,
+                customer_address
+            )
+            VALUES (%s, %s, %s, %s)
+            RETURNING customer_id, customer_name, customer_email, customer_pnumber, customer_address;
+        """, (
+            customer.customer_name.strip(),
+            customer.customer_email.strip().lower(),
+            customer.customer_pnumber.strip() if customer.customer_pnumber else None,
+            customer.customer_address.strip() if customer.customer_address else None
+        ))
+
+        row = cursor.fetchone()
+        conn.commit()
+
+        return {
+            "message": "Customer created successfully",
+            "customer": {
+                "customer_id": row[0],
+                "customer_name": row[1],
+                "customer_email": row[2],
+                "customer_pnumber": row[3],
+                "customer_address": row[4]
+            }
+        }
+
+    except UniqueViolation:
+        conn.rollback()
+        raise HTTPException(status_code=409, detail="Customer email already exists")
+
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
 @app.post("/transactions")
 def create_transaction(transaction: NewTransaction):
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-        risk_score, risk_level, reasons = calculate_fraud_score(transaction)
+        fraud_analysis = analyze_fraud(transaction)
+        risk_score = fraud_analysis["risk_score"]
+        risk_level = fraud_analysis["risk_level"]
+        reasons = fraud_analysis["reasons"]
 
         if "High" in risk_level:
             transaction_status = "rejected"
@@ -326,7 +662,14 @@ def create_transaction(transaction: NewTransaction):
             "risk_score": risk_score,
             "risk_level": risk_level,
             "decision": decision,
-            "reasons": reasons
+            "recommended_action": fraud_analysis["recommended_action"],
+            "risk_breakdown": fraud_analysis["risk_breakdown"],
+            "reasons": reasons,
+            "rule_score": fraud_analysis["rule_score"],
+            "rule_risk_level": fraud_analysis["rule_risk_level"],
+            "ml_fraud_probability": fraud_analysis["ml_fraud_probability"],
+            "ml_risk_level": fraud_analysis["ml_risk_level"],
+            "ml_features": fraud_analysis["ml_features"]
         }
 
     except Exception as e:
@@ -339,12 +682,18 @@ def create_transaction(transaction: NewTransaction):
 
 
 @app.get("/transactions")
-def get_transactions():
+def get_transactions(account_type: Optional[str] = None, merchant_id: Optional[int] = None):
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-        cursor.execute("""
+        transaction_where, transaction_params = get_prefixed_merchant_scope(
+            account_type,
+            merchant_id,
+            "t"
+        )
+
+        cursor.execute(f"""
             SELECT 
                 t.transaction_id,
                 m.merchant_name,
@@ -368,8 +717,9 @@ def get_transactions():
                 ON t.customer_id = c.customer_id
             LEFT JOIN fraud_check fc 
                 ON t.transaction_id = fc.transaction_id
+            {transaction_where}
             ORDER BY t.transaction_date DESC;
-        """)
+        """, transaction_params)
 
         rows = cursor.fetchall()
         column_names = [desc[0] for desc in cursor.description]
@@ -396,12 +746,23 @@ def get_transactions():
 
 
 @app.get("/transactions/{transaction_id}")
-def get_transaction_detail(transaction_id: int):
+def get_transaction_detail(
+    transaction_id: int,
+    account_type: Optional[str] = None,
+    merchant_id: Optional[int] = None
+):
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-        cursor.execute("""
+        merchant_condition = ""
+        params = [transaction_id]
+
+        if account_type == "merchant" and merchant_id is not None:
+            merchant_condition = " AND t.merchant_id = %s"
+            params.append(merchant_id)
+
+        cursor.execute(f"""
             SELECT 
                 t.transaction_id,
                 m.merchant_name,
@@ -435,8 +796,9 @@ def get_transaction_detail(transaction_id: int):
                 ON t.transaction_id = fc.transaction_id
             LEFT JOIN delivery_log dl
                 ON t.transaction_id = dl.transaction_id
-            WHERE t.transaction_id = %s;
-        """, (transaction_id,))
+            WHERE t.transaction_id = %s
+            {merchant_condition};
+        """, tuple(params))
 
         row = cursor.fetchone()
 
@@ -491,12 +853,18 @@ def get_transaction_detail(transaction_id: int):
 
 
 @app.get("/alerts")
-def get_alerts():
+def get_alerts(account_type: Optional[str] = None, merchant_id: Optional[int] = None):
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-        cursor.execute("""
+        transaction_where, transaction_params = get_prefixed_merchant_scope(
+            account_type,
+            merchant_id,
+            "t"
+        )
+
+        cursor.execute(f"""
             SELECT
                 a.alert_id,
                 a.transaction_id,
@@ -521,8 +889,9 @@ def get_alerts():
                 ON t.merchant_id = m.merchant_id
             LEFT JOIN fraud_check fc
                 ON t.transaction_id = fc.transaction_id
+            {transaction_where}
             ORDER BY a.alert_id DESC;
-        """)
+        """, transaction_params)
 
         rows = cursor.fetchall()
         column_names = [desc[0] for desc in cursor.description]
