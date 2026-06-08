@@ -1,7 +1,12 @@
 import hashlib
+import os
+import time
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+import bcrypt
+import jwt
+from jwt import ExpiredSignatureError, InvalidTokenError
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from psycopg.errors import UniqueViolation
@@ -12,10 +17,29 @@ from database import get_connection
 
 
 app = FastAPI(title="Fraud Prevention System API")
+dashboard_cache = {}
+rate_limit_store = {}
+
+
+def get_allowed_origins():
+    raw_origins = os.environ.get("ALLOWED_ORIGINS") or os.environ.get("FRONTEND_URL")
+
+    if raw_origins:
+        return [
+            origin.strip()
+            for origin in raw_origins.split(",")
+            if origin.strip()
+        ]
+
+    return [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ]
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_allowed_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,7 +89,106 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+def get_auth_secret():
+    return os.environ.get("AUTH_TOKEN_SECRET", "fraudshield-demo-secret")
+
+
+def create_auth_token(user):
+    issued_at = int(time.time())
+    expires_at = issued_at + int(os.environ.get("AUTH_TOKEN_TTL_SECONDS", "86400"))
+    payload = {
+        "sub": str(user["id"]),
+        "id": user["id"],
+        "email": user["email"],
+        "name": user["name"],
+        "account_type": user["account_type"],
+        "iat": issued_at,
+        "exp": expires_at
+    }
+
+    return jwt.encode(payload, get_auth_secret(), algorithm="HS256")
+
+
+def verify_auth_token(token):
+    try:
+        return jwt.decode(token, get_auth_secret(), algorithms=["HS256"])
+    except ExpiredSignatureError as exc:
+        raise HTTPException(status_code=401, detail="Auth token expired")
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail="Invalid auth token") from exc
+
+
+def get_authenticated_user(authorization: Optional[str] = None):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing authorization token")
+
+    scheme, _, token = authorization.partition(" ")
+
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+
+    return verify_auth_token(token)
+
+
+def get_authenticated_scope(authorization, prefix=None):
+    authenticated_user = get_authenticated_user(authorization)
+
+    if authenticated_user.get("account_type") == "merchant":
+        merchant_id = authenticated_user.get("id")
+        column_name = f"{prefix}.merchant_id" if prefix else "merchant_id"
+        return authenticated_user, f" WHERE {column_name} = %s", (merchant_id,)
+
+    return authenticated_user, "", ()
+
+
+def get_client_identifier(request: Request):
+    forwarded_for = request.headers.get("x-forwarded-for")
+
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+
+    if request.client:
+        return request.client.host
+
+    return "unknown"
+
+
+def check_rate_limit(request: Request, bucket: str, max_requests: int, window_seconds: int):
+    now = time.time()
+    client_id = get_client_identifier(request)
+    rate_key = (bucket, client_id)
+    request_times = rate_limit_store.get(rate_key, [])
+    request_times = [
+        request_time
+        for request_time in request_times
+        if now - request_time < window_seconds
+    ]
+
+    if len(request_times) >= max_requests:
+        retry_after = max(1, int(window_seconds - (now - request_times[0])))
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests. Please try again later.",
+            headers={"Retry-After": str(retry_after)}
+        )
+
+    request_times.append(now)
+    rate_limit_store[rate_key] = request_times
+
+
+def get_rate_limit_config(prefix, default_max, default_window):
+    max_requests = int(os.environ.get(f"{prefix}_MAX_REQUESTS", str(default_max)))
+    window_seconds = int(os.environ.get(f"{prefix}_WINDOW_SECONDS", str(default_window)))
+    return max_requests, window_seconds
+
+
 def hash_password(password):
+    password_bytes = password.encode("utf-8")
+    hashed_password = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
+    return "bcrypt:" + hashed_password.decode("utf-8")
+
+
+def hash_password_sha256(password):
     return "sha256:" + hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
@@ -79,8 +202,12 @@ def verify_password(password, stored_password):
     if not stored_password:
         return False
 
+    if stored_password.startswith("bcrypt:"):
+        bcrypt_hash = stored_password.removeprefix("bcrypt:").encode("utf-8")
+        return bcrypt.checkpw(password.encode("utf-8"), bcrypt_hash)
+
     if stored_password.startswith("sha256:"):
-        return stored_password == hash_password(password)
+        return stored_password == hash_password_sha256(password)
 
     if stored_password.startswith("placeholder_hash_"):
         return stored_password == f"placeholder_hash_{password}"
@@ -157,18 +284,53 @@ def get_recommended_action(risk_level):
     return "Approve this transaction and continue normal order processing."
 
 
-def get_merchant_scope(account_type=None, merchant_id=None):
-    if account_type == "merchant" and merchant_id is not None:
-        return " WHERE merchant_id = %s", (merchant_id,)
-
-    return "", ()
+def get_actor_label(performed_by=None):
+    actor = str(performed_by or "").strip()
+    return actor[:50] if actor else "Admin"
 
 
-def get_prefixed_merchant_scope(account_type=None, merchant_id=None, prefix="t"):
-    if account_type == "merchant" and merchant_id is not None:
-        return f" WHERE {prefix}.merchant_id = %s", (merchant_id,)
+def get_actor_user_id(authenticated_user=None, fallback="system"):
+    if authenticated_user and authenticated_user.get("id") is not None:
+        return str(authenticated_user.get("id"))[:50]
 
-    return "", ()
+    return fallback[:50]
+
+
+def require_admin_user(authenticated_user):
+    if authenticated_user.get("account_type") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin users can perform this action."
+        )
+
+
+def get_cache_ttl():
+    return int(os.environ.get("DASHBOARD_CACHE_TTL_SECONDS", "30"))
+
+
+def get_dashboard_cache(cache_name, account_type=None, merchant_id=None):
+    cache_key = (cache_name, account_type or "admin", merchant_id)
+    cached_value = dashboard_cache.get(cache_key)
+
+    if not cached_value:
+        return None
+
+    cached_at, data = cached_value
+
+    if time.time() - cached_at > get_cache_ttl():
+        dashboard_cache.pop(cache_key, None)
+        return None
+
+    return data
+
+
+def set_dashboard_cache(cache_name, data, account_type=None, merchant_id=None):
+    cache_key = (cache_name, account_type or "admin", merchant_id)
+    dashboard_cache[cache_key] = (time.time(), data)
+
+
+def clear_dashboard_cache():
+    dashboard_cache.clear()
 
 
 def analyze_fraud(transaction):
@@ -203,26 +365,53 @@ def root():
 
 
 @app.post("/auth/login")
-def login(payload: LoginRequest):
+def login(payload: LoginRequest, request: Request):
+    max_requests, window_seconds = get_rate_limit_config(
+        "LOGIN_RATE_LIMIT",
+        10,
+        60
+    )
+    check_rate_limit(request, "auth_login", max_requests, window_seconds)
+
     email = payload.email.strip().lower()
     password = payload.password
-
-    if email == "admin@fraudshield.com" and password == "admin123":
-        return {
-            "message": "Login successful",
-            "user": {
-                "id": "admin",
-                "name": "Admin",
-                "email": email,
-                "role": "Fraud Analyst",
-                "account_type": "admin"
-            }
-        }
 
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
+        cursor.execute("SELECT to_regclass('public.admin_user');")
+        admin_table_exists = cursor.fetchone()[0] is not None
+
+        if admin_table_exists:
+            cursor.execute("""
+                SELECT
+                    admin_user_id,
+                    admin_name,
+                    admin_email,
+                    password_hash,
+                    role
+                FROM admin_user
+                WHERE admin_email = %s;
+            """, (email,))
+
+            admin_user = cursor.fetchone()
+
+            if admin_user is not None and verify_password(password, admin_user[3]):
+                user = {
+                    "id": f"admin:{admin_user[0]}",
+                    "name": admin_user[1],
+                    "email": admin_user[2],
+                    "role": admin_user[4],
+                    "account_type": "admin"
+                }
+
+                return {
+                    "message": "Login successful",
+                    "user": user,
+                    "token": create_auth_token(user)
+                }
+
         cursor.execute("""
             SELECT
                 merchant_id,
@@ -239,15 +428,18 @@ def login(payload: LoginRequest):
         if merchant is None or not verify_password(password, merchant[3]):
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
+        user = {
+            "id": merchant[0],
+            "name": merchant[1],
+            "email": merchant[2],
+            "role": merchant[4] or "Merchant",
+            "account_type": "merchant"
+        }
+
         return {
             "message": "Login successful",
-            "user": {
-                "id": merchant[0],
-                "name": merchant[1],
-                "email": merchant[2],
-                "role": merchant[4] or "Merchant",
-                "account_type": "merchant"
-            }
+            "user": user,
+            "token": create_auth_token(user)
         }
 
     except HTTPException:
@@ -324,21 +516,30 @@ def analyze_transaction(transaction: Transaction):
 
 
 @app.get("/dashboard/summary")
-def get_dashboard_summary(account_type: Optional[str] = None, merchant_id: Optional[int] = None):
+def get_dashboard_summary(authorization: Optional[str] = Header(default=None)):
+    authenticated_user, transaction_where, transaction_params = get_authenticated_scope(
+        authorization
+    )
+    _, joined_where, joined_params = get_authenticated_scope(authorization, "t")
+    cache_account_type = authenticated_user.get("account_type")
+    cache_merchant_id = (
+        authenticated_user.get("id")
+        if cache_account_type == "merchant"
+        else None
+    )
+    cached_summary = get_dashboard_cache(
+        "summary",
+        cache_account_type,
+        cache_merchant_id
+    )
+
+    if cached_summary is not None:
+        return cached_summary
+
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-        transaction_where, transaction_params = get_merchant_scope(
-            account_type,
-            merchant_id
-        )
-        joined_where, joined_params = get_prefixed_merchant_scope(
-            account_type,
-            merchant_id,
-            "t"
-        )
-
         cursor.execute(f"""
             SELECT
                 COUNT(*) AS total_transactions,
@@ -379,7 +580,7 @@ def get_dashboard_summary(account_type: Optional[str] = None, merchant_id: Optio
 
         risk_summary = cursor.fetchone()
 
-        return {
+        summary = {
             "total_transactions": transaction_summary[0],
             "approved_transactions": transaction_summary[1],
             "pending_review": transaction_summary[2],
@@ -394,6 +595,10 @@ def get_dashboard_summary(account_type: Optional[str] = None, merchant_id: Optio
             "low_risk": risk_summary[2]
         }
 
+        set_dashboard_cache("summary", summary, cache_account_type, cache_merchant_id)
+
+        return summary
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -402,16 +607,29 @@ def get_dashboard_summary(account_type: Optional[str] = None, merchant_id: Optio
         conn.close()
 
 @app.get("/dashboard/trends")
-def get_dashboard_trends(account_type: Optional[str] = None, merchant_id: Optional[int] = None):
+def get_dashboard_trends(authorization: Optional[str] = Header(default=None)):
+    authenticated_user, transaction_where, transaction_params = get_authenticated_scope(
+        authorization
+    )
+    cache_account_type = authenticated_user.get("account_type")
+    cache_merchant_id = (
+        authenticated_user.get("id")
+        if cache_account_type == "merchant"
+        else None
+    )
+    cached_trends = get_dashboard_cache(
+        "trends",
+        cache_account_type,
+        cache_merchant_id
+    )
+
+    if cached_trends is not None:
+        return cached_trends
+
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-        transaction_where, transaction_params = get_merchant_scope(
-            account_type,
-            merchant_id
-        )
-
         cursor.execute(f"""
             SELECT
                 DATE(transaction_date) AS date,
@@ -439,7 +657,15 @@ def get_dashboard_trends(account_type: Optional[str] = None, merchant_id: Option
                 "frozen": row[5]
             })
 
-        return {"trends": trends}
+        trend_response = {"trends": trends}
+        set_dashboard_cache(
+            "trends",
+            trend_response,
+            cache_account_type,
+            cache_merchant_id
+        )
+
+        return trend_response
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -449,20 +675,29 @@ def get_dashboard_trends(account_type: Optional[str] = None, merchant_id: Option
         conn.close()
 
 @app.get("/merchants")
-def get_merchants():
+def get_merchants(authorization: Optional[str] = Header(default=None)):
+    authenticated_user = get_authenticated_user(authorization)
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-        cursor.execute("""
+        merchant_where = ""
+        params = ()
+
+        if authenticated_user.get("account_type") == "merchant":
+            merchant_where = "WHERE merchant_id = %s"
+            params = (authenticated_user.get("id"),)
+
+        cursor.execute(f"""
             SELECT 
                 merchant_id,
                 merchant_name,
                 merchant_email,
                 business_type
             FROM merchant
+            {merchant_where}
             ORDER BY merchant_name ASC;
-        """)
+        """, params)
 
         rows = cursor.fetchall()
         column_names = [desc[0] for desc in cursor.description]
@@ -483,7 +718,13 @@ def get_merchants():
 
 
 @app.post("/merchants")
-def create_merchant(merchant: NewMerchant):
+def create_merchant(
+    merchant: NewMerchant,
+    authorization: Optional[str] = Header(default=None)
+):
+    authenticated_user = get_authenticated_user(authorization)
+    require_admin_user(authenticated_user)
+
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -509,6 +750,7 @@ def create_merchant(merchant: NewMerchant):
 
         row = cursor.fetchone()
         conn.commit()
+        clear_dashboard_cache()
 
         return {
             "message": "Merchant created successfully",
@@ -535,7 +777,9 @@ def create_merchant(merchant: NewMerchant):
 
 
 @app.get("/customers")
-def get_customers():
+def get_customers(authorization: Optional[str] = Header(default=None)):
+    get_authenticated_user(authorization)
+
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -570,7 +814,13 @@ def get_customers():
 
 
 @app.post("/customers")
-def create_customer(customer: NewCustomer):
+def create_customer(
+    customer: NewCustomer,
+    authorization: Optional[str] = Header(default=None)
+):
+    authenticated_user = get_authenticated_user(authorization)
+    require_admin_user(authenticated_user)
+
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -593,6 +843,7 @@ def create_customer(customer: NewCustomer):
 
         row = cursor.fetchone()
         conn.commit()
+        clear_dashboard_cache()
 
         return {
             "message": "Customer created successfully",
@@ -619,12 +870,39 @@ def create_customer(customer: NewCustomer):
 
 
 @app.post("/transactions")
-def create_transaction(transaction: NewTransaction):
+def create_transaction(
+    transaction: NewTransaction,
+    request: Request,
+    authorization: Optional[str] = Header(default=None)
+):
+    max_requests, window_seconds = get_rate_limit_config(
+        "TRANSACTION_RATE_LIMIT",
+        30,
+        60
+    )
+    check_rate_limit(request, "create_transaction", max_requests, window_seconds)
+
+    authenticated_user = get_authenticated_user(authorization)
+    effective_merchant_id = transaction.merchant_id
+
+    if authenticated_user.get("account_type") == "merchant":
+        effective_merchant_id = int(authenticated_user.get("id"))
+
+        if transaction.merchant_id != effective_merchant_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Merchant users can only submit transactions for their own account."
+            )
+
+    transaction_for_analysis = transaction.model_copy(
+        update={"merchant_id": effective_merchant_id}
+    )
+
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-        fraud_analysis = analyze_fraud(transaction)
+        fraud_analysis = analyze_fraud(transaction_for_analysis)
         risk_score = fraud_analysis["risk_score"]
         risk_level = fraud_analysis["risk_level"]
         reasons = fraud_analysis["reasons"]
@@ -655,7 +933,7 @@ def create_transaction(transaction: NewTransaction):
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING transaction_id, transaction_date;
         """, (
-            transaction.merchant_id,
+            effective_merchant_id,
             transaction.customer_id,
             transaction.amount,
             transaction.product_category,
@@ -706,16 +984,19 @@ def create_transaction(transaction: NewTransaction):
             INSERT INTO audit_log (
                 transaction_id,
                 action,
-                performed_by
+                performed_by,
+                performed_by_user_id
             )
-            VALUES (%s, %s, %s);
+            VALUES (%s, %s, %s, %s);
         """, (
             transaction_id,
             "Transaction submitted and analyzed.",
-            "System"
+            get_actor_label(authenticated_user.get("email")),
+            get_actor_user_id(authenticated_user)
         ))
 
         conn.commit()
+        clear_dashboard_cache()
 
         return {
             "message": "Transaction submitted successfully",
@@ -745,16 +1026,28 @@ def create_transaction(transaction: NewTransaction):
 
 
 @app.get("/transactions")
-def get_transactions(account_type: Optional[str] = None, merchant_id: Optional[int] = None):
+def get_transactions(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    authorization: Optional[str] = Header(default=None)
+):
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-        transaction_where, transaction_params = get_prefixed_merchant_scope(
-            account_type,
-            merchant_id,
+        _, transaction_where, transaction_params = get_authenticated_scope(
+            authorization,
             "t"
         )
+        offset = (page - 1) * page_size
+
+        cursor.execute(f"""
+            SELECT COUNT(*)
+            FROM transactions t
+            {transaction_where};
+        """, transaction_params)
+
+        total_transactions = cursor.fetchone()[0]
 
         cursor.execute(f"""
             SELECT 
@@ -781,8 +1074,9 @@ def get_transactions(account_type: Optional[str] = None, merchant_id: Optional[i
             LEFT JOIN fraud_check fc 
                 ON t.transaction_id = fc.transaction_id
             {transaction_where}
-            ORDER BY t.transaction_date DESC;
-        """, transaction_params)
+            ORDER BY t.transaction_date DESC
+            LIMIT %s OFFSET %s;
+        """, (*transaction_params, page_size, offset))
 
         rows = cursor.fetchall()
         column_names = [desc[0] for desc in cursor.description]
@@ -798,7 +1092,12 @@ def get_transactions(account_type: Optional[str] = None, merchant_id: Optional[i
 
             transactions.append(transaction)
 
-        return {"transactions": transactions}
+        return {
+            "transactions": transactions,
+            "page": page,
+            "page_size": page_size,
+            "total": total_transactions
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -811,19 +1110,19 @@ def get_transactions(account_type: Optional[str] = None, merchant_id: Optional[i
 @app.get("/transactions/{transaction_id}")
 def get_transaction_detail(
     transaction_id: int,
-    account_type: Optional[str] = None,
-    merchant_id: Optional[int] = None
+    authorization: Optional[str] = Header(default=None)
 ):
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
+        authenticated_user = get_authenticated_user(authorization)
         merchant_condition = ""
         params = [transaction_id]
 
-        if account_type == "merchant" and merchant_id is not None:
+        if authenticated_user.get("account_type") == "merchant":
             merchant_condition = " AND t.merchant_id = %s"
-            params.append(merchant_id)
+            params.append(authenticated_user.get("id"))
 
         cursor.execute(f"""
             SELECT 
@@ -881,6 +1180,7 @@ def get_transaction_detail(
                 audit_id,
                 action,
                 performed_by,
+                performed_by_user_id,
                 timestamp
             FROM audit_log
             WHERE transaction_id = %s
@@ -916,16 +1216,30 @@ def get_transaction_detail(
 
 
 @app.get("/alerts")
-def get_alerts(account_type: Optional[str] = None, merchant_id: Optional[int] = None):
+def get_alerts(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    authorization: Optional[str] = Header(default=None)
+):
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-        transaction_where, transaction_params = get_prefixed_merchant_scope(
-            account_type,
-            merchant_id,
+        _, transaction_where, transaction_params = get_authenticated_scope(
+            authorization,
             "t"
         )
+        offset = (page - 1) * page_size
+
+        cursor.execute(f"""
+            SELECT COUNT(*)
+            FROM alert a
+            JOIN transactions t
+                ON a.transaction_id = t.transaction_id
+            {transaction_where};
+        """, transaction_params)
+
+        total_alerts = cursor.fetchone()[0]
 
         cursor.execute(f"""
             SELECT
@@ -953,8 +1267,9 @@ def get_alerts(account_type: Optional[str] = None, merchant_id: Optional[int] = 
             LEFT JOIN fraud_check fc
                 ON t.transaction_id = fc.transaction_id
             {transaction_where}
-            ORDER BY a.alert_id DESC;
-        """, transaction_params)
+            ORDER BY a.alert_id DESC
+            LIMIT %s OFFSET %s;
+        """, (*transaction_params, page_size, offset))
 
         rows = cursor.fetchall()
         column_names = [desc[0] for desc in cursor.description]
@@ -970,7 +1285,12 @@ def get_alerts(account_type: Optional[str] = None, merchant_id: Optional[int] = 
 
             alerts.append(alert)
 
-        return {"alerts": alerts}
+        return {
+            "alerts": alerts,
+            "page": page,
+            "page_size": page_size,
+            "total": total_alerts
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -981,7 +1301,14 @@ def get_alerts(account_type: Optional[str] = None, merchant_id: Optional[int] = 
 
 
 @app.post("/alerts/{alert_id}/review")
-def mark_alert_reviewed(alert_id: int):
+def mark_alert_reviewed(
+    alert_id: int,
+    performed_by: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None)
+):
+    authenticated_user = get_authenticated_user(authorization)
+    require_admin_user(authenticated_user)
+
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -1009,16 +1336,19 @@ def mark_alert_reviewed(alert_id: int):
             INSERT INTO audit_log (
                 transaction_id,
                 action,
-                performed_by
+                performed_by,
+                performed_by_user_id
             )
-            VALUES (%s, %s, %s);
+            VALUES (%s, %s, %s, %s);
         """, (
             transaction_id,
             "Alert marked as reviewed.",
-            "Admin"
+            get_actor_label(performed_by or authenticated_user.get("email")),
+            get_actor_user_id(authenticated_user)
         ))
 
         conn.commit()
+        clear_dashboard_cache()
 
         return {
             "alert_id": alert_id,
@@ -1040,7 +1370,16 @@ def mark_alert_reviewed(alert_id: int):
         conn.close()
 
 
-def update_transaction_decision(transaction_id: int, transaction_status: str, decision: str, action: str):
+def update_transaction_decision(
+    transaction_id: int,
+    transaction_status: str,
+    decision: str,
+    action: str,
+    performed_by: Optional[str] = None,
+    authenticated_user=None
+):
+    require_admin_user(authenticated_user or {})
+
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -1086,16 +1425,19 @@ def update_transaction_decision(transaction_id: int, transaction_status: str, de
             INSERT INTO audit_log (
                 transaction_id,
                 action,
-                performed_by
+                performed_by,
+                performed_by_user_id
             )
-            VALUES (%s, %s, %s);
+            VALUES (%s, %s, %s, %s);
         """, (
             transaction_id,
             action,
-            "Admin"
+            get_actor_label(performed_by or authenticated_user.get("email")),
+            get_actor_user_id(authenticated_user)
         ))
 
         conn.commit()
+        clear_dashboard_cache()
 
         return {
             "transaction_id": transaction_id,
@@ -1119,30 +1461,54 @@ def update_transaction_decision(transaction_id: int, transaction_status: str, de
 
 
 @app.post("/transactions/{transaction_id}/approve")
-def approve_transaction(transaction_id: int):
+def approve_transaction(
+    transaction_id: int,
+    performed_by: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None)
+):
+    authenticated_user = get_authenticated_user(authorization)
+
     return update_transaction_decision(
         transaction_id=transaction_id,
         transaction_status="approved",
         decision="Approved",
-        action="Transaction approved."
+        action="Transaction approved.",
+        performed_by=performed_by,
+        authenticated_user=authenticated_user
     )
 
 
 @app.post("/transactions/{transaction_id}/reject")
-def reject_transaction(transaction_id: int):
+def reject_transaction(
+    transaction_id: int,
+    performed_by: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None)
+):
+    authenticated_user = get_authenticated_user(authorization)
+
     return update_transaction_decision(
         transaction_id=transaction_id,
         transaction_status="rejected",
         decision="Rejected",
-        action="Transaction rejected."
+        action="Transaction rejected.",
+        performed_by=performed_by,
+        authenticated_user=authenticated_user
     )
 
 
 @app.post("/transactions/{transaction_id}/freeze")
-def freeze_transaction(transaction_id: int):
+def freeze_transaction(
+    transaction_id: int,
+    performed_by: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None)
+):
+    authenticated_user = get_authenticated_user(authorization)
+
     return update_transaction_decision(
         transaction_id=transaction_id,
         transaction_status="frozen",
         decision="Frozen",
-        action="Transaction frozen for review."
+        action="Transaction frozen for review.",
+        performed_by=performed_by,
+        authenticated_user=authenticated_user
     )

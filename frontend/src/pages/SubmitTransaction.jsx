@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import PageHeader from "../components/PageHeader";
+import { buildAuthHeaders } from "../utils/api";
 
 const PRODUCT_CATEGORIES = [
   "Groceries",
@@ -13,7 +14,7 @@ const PRODUCT_CATEGORIES = [
   "Travel"
 ];
 
-export default function SubmitTransaction() {
+export default function SubmitTransaction({ currentUser }) {
   const [formData, setFormData] = useState({
     merchant_id: "",
     customer_id: "",
@@ -41,8 +42,12 @@ export default function SubmitTransaction() {
       setOptionsError("");
 
       try {
-        const merchantResponse = await fetch(`${import.meta.env.VITE_API_URL}/merchants`);
-        const customerResponse = await fetch(`${import.meta.env.VITE_API_URL}/customers`);
+        const merchantResponse = await fetch(`${import.meta.env.VITE_API_URL}/merchants`, {
+          headers: buildAuthHeaders()
+        });
+        const customerResponse = await fetch(`${import.meta.env.VITE_API_URL}/customers`, {
+          headers: buildAuthHeaders()
+        });
 
         const merchantData = await merchantResponse.json();
         const customerData = await customerResponse.json();
@@ -55,7 +60,13 @@ export default function SubmitTransaction() {
           throw new Error(customerData.detail || "Failed to load customers.");
         }
 
-        const merchantList = merchantData.merchants || [];
+        const allMerchants = merchantData.merchants || [];
+        const merchantList =
+          currentUser?.account_type === "merchant"
+            ? allMerchants.filter(
+                (merchant) => String(merchant.merchant_id) === String(currentUser.id)
+              )
+            : allMerchants;
         const customerList = customerData.customers || [];
 
         setMerchants(merchantList);
@@ -77,7 +88,7 @@ export default function SubmitTransaction() {
     };
 
     fetchOptions();
-  }, []);
+  }, [currentUser]);
 
   const getServerErrorMessage = (detail) => {
     if (typeof detail === "string") {
@@ -188,7 +199,10 @@ export default function SubmitTransaction() {
     }
 
     const payload = {
-      merchant_id: Number(formData.merchant_id),
+      merchant_id:
+        currentUser?.account_type === "merchant"
+          ? Number(currentUser.id)
+          : Number(formData.merchant_id),
       customer_id: Number(formData.customer_id),
       amount: Number(formData.amount),
       product_category: formData.product_category.trim(),
@@ -204,7 +218,8 @@ export default function SubmitTransaction() {
       const response = await fetch(`${import.meta.env.VITE_API_URL}/transactions`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          ...buildAuthHeaders()
         },
         body: JSON.stringify(payload)
       });
@@ -218,7 +233,12 @@ export default function SubmitTransaction() {
       setResult(data);
 
       setFormData({
-        merchant_id: merchants.length > 0 ? String(merchants[0].merchant_id) : "",
+        merchant_id:
+          currentUser?.account_type === "merchant"
+            ? String(currentUser.id)
+            : merchants.length > 0
+              ? String(merchants[0].merchant_id)
+              : "",
         customer_id: customers.length > 0 ? String(customers[0].customer_id) : "",
         amount: "",
         product_category: "",
@@ -234,6 +254,10 @@ export default function SubmitTransaction() {
       setSubmitLoading(false);
     }
   };
+
+  const selectedMerchant = merchants.find(
+    (merchant) => String(merchant.merchant_id) === String(formData.merchant_id)
+  );
 
   return (
     <div>
@@ -265,7 +289,11 @@ export default function SubmitTransaction() {
                 name="merchant_id"
                 value={formData.merchant_id}
                 onChange={handleChange}
-                disabled={optionsLoading || merchants.length === 0}
+                disabled={
+                  optionsLoading ||
+                  merchants.length === 0 ||
+                  currentUser?.account_type === "merchant"
+                }
               >
                 {merchants.length === 0 ? (
                   <option value="">No merchants available</option>
@@ -280,6 +308,11 @@ export default function SubmitTransaction() {
                   ))
                 )}
               </select>
+              {currentUser?.account_type === "merchant" && selectedMerchant && (
+                <span className="field-help">
+                  Locked to your merchant account: {selectedMerchant.merchant_name}
+                </span>
+              )}
               {errors.merchant_id && (
                 <span className="field-error">{errors.merchant_id}</span>
               )}

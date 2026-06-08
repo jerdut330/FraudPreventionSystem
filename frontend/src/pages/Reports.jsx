@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { Download } from "lucide-react";
 import PageHeader from "../components/PageHeader";
-import { buildApiUrl } from "../utils/api";
+import { buildApiUrl, buildAuthHeaders } from "../utils/api";
 
-export default function Reports({ currentUser }) {
+export default function Reports() {
   const [summary, setSummary] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [alerts, setAlerts] = useState([]);
@@ -30,10 +30,12 @@ export default function Reports({ currentUser }) {
   };
 
   useEffect(() => {
+    const requestOptions = { headers: buildAuthHeaders() };
+
     Promise.all([
-      fetch(buildApiUrl("/dashboard/summary", currentUser)).then((res) => res.json()),
-      fetch(buildApiUrl("/transactions", currentUser)).then((res) => res.json()),
-      fetch(buildApiUrl("/alerts", currentUser)).then((res) => res.json())
+      fetch(buildApiUrl("/dashboard/summary"), requestOptions).then((res) => res.json()),
+      fetch(buildApiUrl("/transactions"), requestOptions).then((res) => res.json()),
+      fetch(buildApiUrl("/alerts"), requestOptions).then((res) => res.json())
     ])
       .then(([summaryData, transactionData, alertData]) => {
         setSummary(summaryData);
@@ -46,7 +48,7 @@ export default function Reports({ currentUser }) {
         setError("Could not load report data from backend.");
         setLoading(false);
       });
-  }, [currentUser]);
+  }, []);
 
   const filteredTransactions = transactions.filter((transaction) => {
     const riskValue = String(transaction.risk_level).toLowerCase();

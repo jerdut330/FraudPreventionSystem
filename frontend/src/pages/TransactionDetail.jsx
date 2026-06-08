@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import PageHeader from "../components/PageHeader";
-import { buildApiUrl } from "../utils/api";
+import { appendActorParams, buildApiUrl, buildAuthHeaders } from "../utils/api";
 
 export default function TransactionDetail({ transactionId, currentUser }) {
   const [transaction, setTransaction] = useState(null);
@@ -42,7 +42,9 @@ export default function TransactionDetail({ transactionId, currentUser }) {
 
       setError("");
 
-      fetch(buildApiUrl(`/transactions/${transactionId}`, currentUser))
+      fetch(buildApiUrl(`/transactions/${transactionId}`), {
+        headers: buildAuthHeaders()
+      })
         .then((res) => {
           if (!res.ok) {
             throw new Error("Failed to fetch transaction detail");
@@ -60,7 +62,7 @@ export default function TransactionDetail({ transactionId, currentUser }) {
           setLoading(false);
         });
     },
-    [transactionId, currentUser]
+    [transactionId]
   );
 
   useEffect(() => {
@@ -77,9 +79,15 @@ export default function TransactionDetail({ transactionId, currentUser }) {
 
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/transactions/${transaction.transaction_id}/${action}`,
+        buildApiUrl(
+          appendActorParams(
+            `/transactions/${transaction.transaction_id}/${action}`,
+            currentUser
+          )
+        ),
         {
-          method: "POST"
+          method: "POST",
+          headers: buildAuthHeaders()
         }
       );
 
@@ -128,7 +136,14 @@ export default function TransactionDetail({ transactionId, currentUser }) {
   }
 
   const riskClass = getRiskClass(transaction.risk_level);
-  const canReviewTransaction = transaction.transaction_status === "pending_review";
+  const isAdmin = currentUser?.account_type === "admin";
+  const isPendingReview = transaction.transaction_status === "pending_review";
+  const canReviewTransaction = isAdmin && isPendingReview;
+  const decisionHelpText = !isPendingReview
+    ? `This transaction is already ${transaction.transaction_status} and cannot be changed.`
+    : isAdmin
+      ? "Approve, reject, or freeze this transaction. The action will update the database and create an audit log."
+      : "Only admin users can approve, reject, or freeze pending-review transactions.";
 
   return (
     <div>
@@ -164,11 +179,7 @@ export default function TransactionDetail({ transactionId, currentUser }) {
       <div className="transaction-action-panel">
         <div>
           <h3>Transaction Decision</h3>
-          <p>
-            {canReviewTransaction
-              ? "Approve, reject, or freeze this transaction. The action will update the database and create an audit log."
-              : `This transaction is already ${transaction.transaction_status} and cannot be changed.`}
-          </p>
+          <p>{decisionHelpText}</p>
         </div>
 
         <div className="transaction-action-buttons">
@@ -343,7 +354,10 @@ export default function TransactionDetail({ transactionId, currentUser }) {
                 <div className="audit-item" key={log.audit_id}>
                   <strong>{log.action}</strong>
                   <span>
-                    {log.performed_by} • {formatDate(log.timestamp)}
+                    {log.performed_by}
+                    {log.performed_by_user_id
+                      ? ` (ID: ${log.performed_by_user_id})`
+                      : ""} • {formatDate(log.timestamp)}
                   </span>
                 </div>
               ))}

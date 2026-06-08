@@ -41,6 +41,9 @@ FraudPreventionSystem-new/
 │   └── requirements.txt
 ├── database/
 │   ├── schema.sql
+│   ├── admin_user_migration.sql
+│   ├── audit_log_user_id_migration.sql
+│   ├── performance_indexes.sql
 │   └── sample_data.sql
 ├── frontend/
 │   ├── src/
@@ -169,9 +172,91 @@ DB_NAME=fraud_prevention_system
 DB_USER=postgres
 DB_PASSWORD=your_postgres_password
 DB_PORT=5432
+DB_POOL_MIN_SIZE=1
+DB_POOL_MAX_SIZE=5
+DASHBOARD_CACHE_TTL_SECONDS=30
+AUTH_TOKEN_SECRET=replace_with_a_long_random_secret
+AUTH_TOKEN_TTL_SECONDS=86400
+LOGIN_RATE_LIMIT_MAX_REQUESTS=10
+LOGIN_RATE_LIMIT_WINDOW_SECONDS=60
+TRANSACTION_RATE_LIMIT_MAX_REQUESTS=30
+TRANSACTION_RATE_LIMIT_WINDOW_SECONDS=60
 ```
 
 `backend/.env` is ignored by Git because it contains local credentials.
+
+Optional CORS configuration:
+
+```env
+ALLOWED_ORIGINS=http://localhost:5173,https://your-frontend.vercel.app
+```
+
+If `ALLOWED_ORIGINS` is not set, the backend allows only local Vite origins
+(`http://localhost:5173` and `http://127.0.0.1:5173`) by default. In
+production, set `ALLOWED_ORIGINS` to the deployed frontend URL.
+
+## Database Performance Indexes
+
+For a fresh database, `database/schema.sql` already includes useful indexes for
+merchant scoping, transaction dates, statuses, risk levels, alerts, and audit
+logs.
+
+For an existing Supabase/PostgreSQL database, run:
+
+```text
+database/admin_user_migration.sql
+database/audit_log_user_id_migration.sql
+database/performance_indexes.sql
+```
+
+These scripts use `ADD COLUMN IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`,
+so they are safe to run against an existing database.
+
+## API Scaling Notes
+
+The transaction and alert list endpoints support pagination:
+
+```text
+/transactions?page=1&page_size=50
+/alerts?page=1&page_size=50
+```
+
+Dashboard calls request only the small recent lists they display. Monitoring
+requests a bounded page instead of loading an unbounded transaction history.
+
+Audit log actions can include a `performed_by` query parameter so review,
+approve, reject, and freeze actions store the actual acting user label instead
+of a fixed `"Admin"` placeholder. Audit logs also store
+`performed_by_user_id`, so the system keeps a stable actor ID for traceability.
+
+Login returns a signed JWT bearer token. Dashboard, transaction, alert, merchant,
+customer, and transaction-detail reads require that token. Merchant scope is
+derived from the token instead of trusting client-supplied query parameters.
+Merchant users can only submit transactions for their own merchant account.
+Transaction decision endpoints, alert review endpoints, and merchant/customer
+creation endpoints verify the token and require an admin account before changing
+system state. Admin users are authenticated from the `admin_user` database table
+instead of a hardcoded backend password branch. Set `AUTH_TOKEN_SECRET` in
+production; the default secret is only for local/demo development.
+
+New merchant passwords are stored with bcrypt hashes. Legacy `sha256:` and demo
+placeholder hashes are still accepted so existing prototype accounts remain
+usable during migration.
+
+The backend uses PostgreSQL connection pooling when the `psycopg_pool` package
+is installed. Pool size can be tuned with `DB_POOL_MIN_SIZE` and
+`DB_POOL_MAX_SIZE`. If the pool package is unavailable, the backend falls back
+to opening a direct PostgreSQL connection per request.
+
+Dashboard summary and trend responses use a short in-memory cache controlled by
+`DASHBOARD_CACHE_TTL_SECONDS`. The cache is cleared when transactions, alerts,
+or transaction decisions change.
+
+Login and transaction submission endpoints use configurable in-memory rate
+limits. This protects the prototype from repeated login attempts and transaction
+spam. For multi-instance production deployments, the same policy should be
+backed by Redis or another shared store so all backend instances share the same
+rate-limit counters.
 
 ## Run The Backend
 

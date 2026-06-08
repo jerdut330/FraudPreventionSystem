@@ -2523,6 +2523,45 @@ tbody tr:hover {
   font-weight: 600;
 }
 
+.monitoring-pagination {
+  margin-top: 16px;
+  background: #132238;
+  border: 1px solid #1f3550;
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+}
+
+.monitoring-pagination span {
+  color: #d9e6f6;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.monitoring-pagination button {
+  min-width: 96px;
+  height: 38px;
+  background: #1f6feb;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.monitoring-pagination button:hover:not(:disabled) {
+  background: #388bfd;
+}
+
+.monitoring-pagination button:disabled {
+  background: #203247;
+  color: #73859b;
+  cursor: not-allowed;
+}
+
 @media (max-width: 900px) {
   .monitoring-toolbar {
     flex-direction: column;
@@ -2540,6 +2579,10 @@ tbody tr:hover {
 
   .monitoring-filter {
     flex: 1;
+  }
+
+  .monitoring-pagination {
+    justify-content: space-between;
   }
 }
 .header {

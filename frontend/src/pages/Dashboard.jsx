@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 
 import PageHeader from "../components/PageHeader";
-import { buildApiUrl } from "../utils/api";
+import { buildApiUrl, buildAuthHeaders } from "../utils/api";
 
 export default function Dashboard({ currentUser }) {
   const [summary, setSummary] = useState(null);
@@ -27,11 +27,13 @@ export default function Dashboard({ currentUser }) {
   };
 
   useEffect(() => {
+    const requestOptions = { headers: buildAuthHeaders() };
+
     Promise.all([
-      fetch(buildApiUrl("/dashboard/summary", currentUser)).then((res) => res.json()),
-      fetch(buildApiUrl("/dashboard/trends", currentUser)).then((res) => res.json()),
-      fetch(buildApiUrl("/alerts", currentUser)).then((res) => res.json()),
-      fetch(buildApiUrl("/transactions", currentUser)).then((res) => res.json())
+      fetch(buildApiUrl("/dashboard/summary"), requestOptions).then((res) => res.json()),
+      fetch(buildApiUrl("/dashboard/trends"), requestOptions).then((res) => res.json()),
+      fetch(buildApiUrl("/alerts?page_size=4"), requestOptions).then((res) => res.json()),
+      fetch(buildApiUrl("/transactions?page_size=5"), requestOptions).then((res) => res.json())
     ])
       .then(([summaryData, trendData, alertData, transactionData]) => {
         setSummary(summaryData);

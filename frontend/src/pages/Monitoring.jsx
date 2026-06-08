@@ -1,20 +1,34 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import PageHeader from "../components/PageHeader";
-import { buildApiUrl } from "../utils/api";
+import { buildApiUrl, buildAuthHeaders } from "../utils/api";
 
-export default function Monitoring({ setPage, setSelectedTransactionId, currentUser }) {
+const PAGE_SIZE = 50;
+
+export default function Monitoring({ setPage, setSelectedTransactionId }) {
   const [transactions, setTransactions] = useState([]);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: PAGE_SIZE,
+    total: 0
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [riskFilter, setRiskFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
 
-  const fetchTransactions = () => {
+  const fetchTransactions = useCallback(() => {
     setLoading(true);
     setError("");
 
-    fetch(buildApiUrl("/transactions", currentUser))
+    fetch(
+      buildApiUrl(
+        `/transactions?page=${pagination.page}&page_size=${PAGE_SIZE}`
+      ),
+      {
+        headers: buildAuthHeaders()
+      }
+    )
       .then((res) => {
         if (!res.ok) {
           throw new Error("Failed to fetch transactions");
@@ -24,6 +38,12 @@ export default function Monitoring({ setPage, setSelectedTransactionId, currentU
       })
       .then((data) => {
         setTransactions(data.transactions || []);
+        setPagination((prev) => ({
+          ...prev,
+          page: data.page || prev.page,
+          pageSize: data.page_size || PAGE_SIZE,
+          total: data.total || 0
+        }));
         setLoading(false);
       })
       .catch((err) => {
@@ -31,11 +51,11 @@ export default function Monitoring({ setPage, setSelectedTransactionId, currentU
         setError("Could not load transactions from backend.");
         setLoading(false);
       });
-  };
+  }, [pagination.page]);
 
   useEffect(() => {
     fetchTransactions();
-  }, [currentUser]);
+  }, [fetchTransactions]);
 
   const formatAmount = (amount) => {
     return new Intl.NumberFormat("id-ID", {
@@ -95,6 +115,25 @@ export default function Monitoring({ setPage, setSelectedTransactionId, currentU
     setPage("detail");
   };
 
+  const totalPages = Math.max(
+    Math.ceil(pagination.total / pagination.pageSize),
+    1
+  );
+
+  const handlePreviousPage = () => {
+    setPagination((prev) => ({
+      ...prev,
+      page: Math.max(prev.page - 1, 1)
+    }));
+  };
+
+  const handleNextPage = () => {
+    setPagination((prev) => ({
+      ...prev,
+      page: Math.min(prev.page + 1, totalPages)
+    }));
+  };
+
   const filteredTransactions = transactions.filter((transaction) => {
     const searchValue = searchTerm.toLowerCase();
     const riskValue = String(transaction.risk_level).toLowerCase();
@@ -115,6 +154,15 @@ export default function Monitoring({ setPage, setSelectedTransactionId, currentU
 
     return matchesRisk && matchesStatus && matchesSearch;
   });
+
+  const firstVisibleTransaction =
+    pagination.total === 0
+      ? 0
+      : (pagination.page - 1) * pagination.pageSize + 1;
+  const lastVisibleTransaction = Math.min(
+    pagination.page * pagination.pageSize,
+    pagination.total
+  );
 
   if (loading) {
     return (
@@ -148,7 +196,8 @@ export default function Monitoring({ setPage, setSelectedTransactionId, currentU
         <div>
           <h3>Transactions</h3>
           <p>
-            Showing {filteredTransactions.length} of {transactions.length} transactions
+            Showing {firstVisibleTransaction}-{lastVisibleTransaction} of{" "}
+            {pagination.total} transactions
           </p>
         </div>
 
@@ -267,6 +316,28 @@ export default function Monitoring({ setPage, setSelectedTransactionId, currentU
             </tbody>
           </table>
         )}
+      </div>
+
+      <div className="monitoring-pagination">
+        <button
+          type="button"
+          onClick={handlePreviousPage}
+          disabled={pagination.page === 1 || loading}
+        >
+          Previous
+        </button>
+
+        <span>
+          Page {pagination.page} of {totalPages}
+        </span>
+
+        <button
+          type="button"
+          onClick={handleNextPage}
+          disabled={pagination.page === totalPages || loading}
+        >
+          Next
+        </button>
       </div>
     </div>
   );

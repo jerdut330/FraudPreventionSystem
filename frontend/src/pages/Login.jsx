@@ -41,7 +41,7 @@ export default function Login({ onLogin }) {
         throw new Error(getServerErrorMessage(data.detail));
       }
 
-      onLogin(data.user, rememberMe);
+      onLogin(data.user, data.token, rememberMe);
     } catch (err) {
       console.error(err);
       setError(err.message || "Could not sign in.");

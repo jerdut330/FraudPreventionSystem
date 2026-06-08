@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import PageHeader from "../components/PageHeader";
+import { buildAuthHeaders } from "../utils/api";
 
 const BUSINESS_TYPES = [
   "Groceries",
@@ -39,8 +40,12 @@ export default function AdminUsers() {
     setError("");
 
     Promise.all([
-      fetch(`${import.meta.env.VITE_API_URL}/merchants`).then((res) => res.json()),
-      fetch(`${import.meta.env.VITE_API_URL}/customers`).then((res) => res.json())
+      fetch(`${import.meta.env.VITE_API_URL}/merchants`, {
+        headers: buildAuthHeaders()
+      }).then((res) => res.json()),
+      fetch(`${import.meta.env.VITE_API_URL}/customers`, {
+        headers: buildAuthHeaders()
+      }).then((res) => res.json())
     ])
       .then(([merchantData, customerData]) => {
         setMerchants(merchantData.merchants || []);
@@ -93,7 +98,10 @@ export default function AdminUsers() {
     try {
       const response = await fetch(`${import.meta.env.VITE_API_URL}/merchants`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...buildAuthHeaders()
+        },
         body: JSON.stringify({
           merchant_name: merchantForm.merchant_name.trim(),
           merchant_email: merchantForm.merchant_email.trim(),
@@ -135,7 +143,10 @@ export default function AdminUsers() {
     try {
       const response = await fetch(`${import.meta.env.VITE_API_URL}/customers`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...buildAuthHeaders()
+        },
         body: JSON.stringify({
           customer_name: customerForm.customer_name.trim(),
           customer_email: customerForm.customer_email.trim(),

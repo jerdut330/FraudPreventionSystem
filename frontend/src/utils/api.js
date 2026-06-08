@@ -1,11 +1,39 @@
-export function buildApiUrl(path, currentUser) {
+export function buildApiUrl(path) {
   const baseUrl = import.meta.env.VITE_API_URL;
-  const url = new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
+  return new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
+}
 
-  if (currentUser?.account_type === "merchant") {
-    url.searchParams.set("account_type", "merchant");
-    url.searchParams.set("merchant_id", currentUser.id);
+export function getStoredAuthToken() {
+  return (
+    localStorage.getItem("fraudshield_token") ||
+    sessionStorage.getItem("fraudshield_token")
+  );
+}
+
+export function buildAuthHeaders() {
+  const token = getStoredAuthToken();
+
+  if (!token) {
+    return {};
   }
 
-  return url.toString();
+  return {
+    Authorization: `Bearer ${token}`
+  };
+}
+
+export function getActorLabel(currentUser) {
+  if (!currentUser) {
+    return "Admin";
+  }
+
+  return currentUser.email || currentUser.name || "Admin";
+}
+
+export function appendActorParams(path, currentUser) {
+  const separator = path.includes("?") ? "&" : "?";
+
+  return `${path}${separator}performed_by=${encodeURIComponent(
+    getActorLabel(currentUser)
+  )}`;
 }

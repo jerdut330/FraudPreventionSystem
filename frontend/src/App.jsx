@@ -27,16 +27,20 @@ export default function App() {
     const savedUser =
       localStorage.getItem("fraudshield_user") ||
       sessionStorage.getItem("fraudshield_user");
+    const savedToken =
+      localStorage.getItem("fraudshield_token") ||
+      sessionStorage.getItem("fraudshield_token");
 
-    if (savedUser) {
+    if (savedUser && savedToken) {
       setCurrentUser(JSON.parse(savedUser));
       setLoggedIn(true);
     }
   }, []);
 
-  const handleLogin = (user, rememberUser) => {
+  const handleLogin = (user, token, rememberUser) => {
     const storage = rememberUser ? localStorage : sessionStorage;
     storage.setItem("fraudshield_user", JSON.stringify(user));
+    storage.setItem("fraudshield_token", token);
     setCurrentUser(user);
     setLoggedIn(true);
     setPage("dashboard");
@@ -44,7 +48,9 @@ export default function App() {
 
   const handleLogout = () => {
     localStorage.removeItem("fraudshield_user");
+    localStorage.removeItem("fraudshield_token");
     sessionStorage.removeItem("fraudshield_user");
+    sessionStorage.removeItem("fraudshield_token");
     setCurrentUser(null);
     setLoggedIn(false);
     setPage("dashboard");
@@ -89,6 +95,7 @@ export default function App() {
           <Alerts
             setPage={setPage}
             setSelectedTransactionId={setSelectedTransactionId}
+            currentUser={currentUser}
           />
         );
 
@@ -101,7 +108,7 @@ export default function App() {
         );
 
       case "risk":
-        return <SubmitTransaction />;
+        return <SubmitTransaction currentUser={currentUser} />;
 
       case "reports":
         return <Reports currentUser={currentUser} />;

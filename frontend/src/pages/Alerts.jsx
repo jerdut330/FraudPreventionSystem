@@ -1,7 +1,13 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import PageHeader from "../components/PageHeader";
+import {
+  appendActorParams,
+  buildApiUrl,
+  buildAuthHeaders,
+  getActorLabel
+} from "../utils/api";
 
-export default function Alerts({ setPage, setSelectedTransactionId }) {
+export default function Alerts({ setPage, setSelectedTransactionId, currentUser }) {
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState("");
@@ -9,11 +15,13 @@ export default function Alerts({ setPage, setSelectedTransactionId }) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  const fetchAlerts = () => {
+  const fetchAlerts = useCallback(() => {
     setLoading(true);
     setError("");
 
-    fetch(`${import.meta.env.VITE_API_URL}/alerts`)
+    fetch(buildApiUrl("/alerts?page_size=100"), {
+      headers: buildAuthHeaders()
+    })
       .then((res) => {
         if (!res.ok) {
           throw new Error("Failed to fetch alerts");
@@ -30,11 +38,11 @@ export default function Alerts({ setPage, setSelectedTransactionId }) {
         setError("Could not load fraud alerts from backend.");
         setLoading(false);
       });
-  };
+  }, []);
 
   useEffect(() => {
     fetchAlerts();
-  }, []);
+  }, [fetchAlerts]);
 
   const formatAmount = (amount) => {
     return new Intl.NumberFormat("id-ID", {
@@ -72,9 +80,12 @@ export default function Alerts({ setPage, setSelectedTransactionId }) {
 
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/transactions/${transactionId}/freeze`,
+        buildApiUrl(
+          appendActorParams(`/transactions/${transactionId}/freeze`, currentUser)
+        ),
         {
-          method: "POST"
+          method: "POST",
+          headers: buildAuthHeaders()
         }
       );
 
@@ -101,9 +112,12 @@ export default function Alerts({ setPage, setSelectedTransactionId }) {
 
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/alerts/${alertId}/review`,
+        buildApiUrl(
+          `/alerts/${alertId}/review?performed_by=${encodeURIComponent(getActorLabel(currentUser))}`
+        ),
         {
-          method: "POST"
+          method: "POST",
+          headers: buildAuthHeaders()
         }
       );
 
@@ -229,7 +243,10 @@ export default function Alerts({ setPage, setSelectedTransactionId }) {
                   <button
                     className="freeze-alert-btn"
                     onClick={() => handleFreeze(alert.transaction_id)}
-                    disabled={actionLoading === alert.transaction_id}
+                    disabled={
+                      currentUser?.account_type !== "admin" ||
+                      actionLoading === alert.transaction_id
+                    }
                   >
                     {actionLoading === alert.transaction_id
                       ? "Freezing..."
@@ -241,7 +258,10 @@ export default function Alerts({ setPage, setSelectedTransactionId }) {
                     onClick={() =>
                       handleMarkReviewed(alert.alert_id, alert.transaction_id)
                     }
-                    disabled={reviewLoading === alert.alert_id}
+                    disabled={
+                      currentUser?.account_type !== "admin" ||
+                      reviewLoading === alert.alert_id
+                    }
                   >
                     {reviewLoading === alert.alert_id
                       ? "Marking..."

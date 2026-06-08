@@ -15,6 +15,20 @@ VALUES
 (5, 'Tono Santoso', 'tono@example.com', '085566778899', 'Yogyakarta, Indonesia')
 ON CONFLICT (customer_email) DO NOTHING;
 
+INSERT INTO admin_user (
+    admin_name,
+    admin_email,
+    password_hash,
+    role
+)
+VALUES (
+    'Admin',
+    'admin@fraudshield.com',
+    'sha256:240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9',
+    'Fraud Analyst'
+)
+ON CONFLICT (admin_email) DO NOTHING;
+
 SELECT setval('merchant_merchant_id_seq', GREATEST((SELECT MAX(merchant_id) FROM merchant), 1));
 SELECT setval('customer_customer_id_seq', GREATEST((SELECT MAX(customer_id) FROM customer), 1));
 
