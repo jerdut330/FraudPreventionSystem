@@ -134,7 +134,9 @@ export default function SubmitTransaction() {
 
     if (!formData.amount || !Number.isFinite(amount) || amount <= 0) {
       newErrors.amount = "Amount must be greater than 0.";
-    }   
+    } else if (amount > 9999999999999.99) {
+      newErrors.amount = "Amount exceeds the maximum allowed value.";
+    }
 
     if (!formData.product_category.trim()) {
       newErrors.product_category = "Product category is required.";

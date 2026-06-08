@@ -18,7 +18,7 @@ CREATE TABLE transactions (
     transaction_id SERIAL PRIMARY KEY,
     merchant_id INT NOT NULL,
     customer_id INT NOT NULL,
-    amount DECIMAL(10,2) NOT NULL,
+    amount DECIMAL(15,2) NOT NULL,
     product_category VARCHAR(50),
     billing_address TEXT NOT NULL,
     shipping_address TEXT NOT NULL,
